@@ -1,89 +1,111 @@
+"""Tests for src modules."""
+
 import pytest
 from datetime import datetime, timedelta, timezone
-from unittest.mock import patch, MagicMock
-from rss_api import RSSExtractorAPI, BEIJING_TZ
+from unittest.mock import MagicMock
+
+from src.feed_parser import FeedParser
+from src.state_manager import StateManager
+from src.fetcher import Fetcher
+from src.summarizer import Summarizer
+from src.models import RSSEntry, RSSResponse
 
 
-class TestRSSExtractorAPI:
+BEIJING_TZ = timezone(timedelta(hours=8))
+
+
+class TestFeedParser:
     @pytest.fixture
-    def extractor(self, tmp_path):
-        config = tmp_path / "config.ini"
-        config.write_text("""[rss]
-url1 = https://example.com/feed1
-url2 = https://example.com/feed2
+    def parser(self):
+        return FeedParser()
 
-[headers]
-user_agent = TestAgent/1.0
-
-[filter]
-days = 7
-enabled = true
-""")
-        ext = RSSExtractorAPI()
-        ext.config_path = config
-        ext.config = MagicMock()
-        ext.config.get.side_effect = lambda section, key: {
-            ('headers', 'user_agent'): 'TestAgent/1.0',
-            ('filter', 'days'): '7',
-        }.get((section, key))
-        return ext
-
-    def test_load_rss_feeds(self, extractor):
-        with patch.object(extractor, 'config') as mock_config:
-            mock_config.items.return_value = [
-                ('url1', 'https://example.com/feed1'),
-                ('url2', 'https://example.com/feed2'),
-            ]
-            urls = extractor.load_rss_feeds()
-            assert len(urls) == 2
-            assert 'https://example.com/feed1' in urls
-            assert 'https://example.com/feed2' in urls
-
-    def test_get_entry_date_with_updated(self):
+    def test_get_entry_date_with_updated(self, parser):
         entry = MagicMock()
-        entry.updated = '2026-04-19T10:00:00Z'
-        result = RSSExtractorAPI.get_entry_date(None, entry)
+        entry.updated = "2026-04-19T10:00:00Z"
+        result = parser.get_entry_date(entry)
+        assert result is not None
         assert result.tzinfo is not None
 
-    def test_get_entry_date_with_published(self):
+    def test_get_entry_date_with_published(self, parser):
         entry = MagicMock()
-        entry.published = '2026-04-19T10:00:00Z'
-        result = RSSExtractorAPI.get_entry_date(None, entry)
+        entry.published = "2026-04-19T10:00:00Z"
+        result = parser.get_entry_date(entry)
+        assert result is not None
         assert result.tzinfo is not None
 
-    def test_get_entry_date_missing_all_fields(self):
+    def test_get_entry_date_missing_all_fields(self, parser):
         entry = MagicMock(spec=[])
-        result = RSSExtractorAPI.get_entry_date(None, entry)
+        result = parser.get_entry_date(entry)
         assert result is None
 
-    def test_filter_by_date_within_range(self, extractor):
+    def test_filter_by_date_within_range(self, parser):
         now = datetime.now(BEIJING_TZ)
         entry = MagicMock()
         entry.updated = (now - timedelta(hours=1)).isoformat()
-        with patch.object(extractor, 'get_entry_date', return_value=now - timedelta(hours=1)):
-            result = extractor.filter_by_date([entry], days=7)
-            assert len(result) == 1
+        result = parser.filter_by_date([entry], days=7)
+        assert len(result) == 1
 
-    def test_filter_by_date_out_of_range(self, extractor):
+    def test_filter_by_date_out_of_range(self, parser):
         entry = MagicMock()
-        with patch.object(extractor, 'get_entry_date', return_value=None):
-            result = extractor.filter_by_date([entry], days=7)
-            assert len(result) == 0
+        entry.updated = "2020-01-01T00:00:00Z"
+        result = parser.filter_by_date([entry], days=7)
+        assert len(result) == 0
 
-    def test_format_entry(self, extractor):
-        now = datetime.now(BEIJING_TZ)
+    def test_parse_entry(self, parser):
         entry = MagicMock()
         entry.get.side_effect = lambda k: {
-            'title': 'Test Title',
-            'link': 'https://example.com/article',
-            'summary': 'Test summary',
-            'content': 'Test content',
+            "title": "Test Title",
+            "link": "https://example.com/article",
+            "summary": "Test summary",
+            "content": "Test content",
         }.get(k)
+        result = parser.parse_entry(entry)
+        assert result["title"] == "Test Title"
+        assert result["link"] == "https://example.com/article"
 
-        with patch.object(extractor, 'get_entry_date', return_value=now):
-            result = extractor.format_entry(entry)
-            assert result['title'] == 'Test Title'
-            assert result['link'] == 'https://example.com/article'
-            assert result['summary'] == 'Test summary'
-            assert result['content'] == 'Test content'
-            assert 'ai_summary' not in result
+
+class TestStateManager:
+    def test_last_fetch_none_when_empty(self, tmp_path):
+        state_file = tmp_path / "state.json"
+        manager = StateManager(state_file)
+        assert manager.last_fetch is None
+
+    def test_update_last_fetch(self, tmp_path):
+        state_file = tmp_path / "state.json"
+        manager = StateManager(state_file)
+        result = manager.update_last_fetch()
+        assert "(北京时间)" in result
+        assert manager.last_fetch is not None
+
+    def test_reset(self, tmp_path):
+        state_file = tmp_path / "state.json"
+        manager = StateManager(state_file)
+        manager.update_last_fetch()
+        manager.reset()
+        assert manager.last_fetch is None
+
+
+class TestModels:
+    def test_rss_entry_defaults(self):
+        entry = RSSEntry()
+        assert entry.title == ""
+        assert entry.ai_summary == ""
+
+    def test_rss_response(self):
+        entry = RSSEntry(title="Test", link="https://example.com")
+        response = RSSResponse(total=1, entries=[entry])
+        assert response.total == 1
+        assert len(response.entries) == 1
+        assert response.incremental is False
+
+    def test_rss_entry_to_dict(self):
+        entry = RSSEntry(title="Test", link="https://example.com", ai_summary="Summary")
+        d = entry.to_dict()
+        assert d["title"] == "Test"
+        assert d["ai_summary"] == "Summary"
+
+
+class TestSummarizer:
+    def test_summarizer_init_no_key(self):
+        with pytest.raises(ValueError):
+            Summarizer(api_key="invalid_key")
