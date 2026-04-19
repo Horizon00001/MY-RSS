@@ -1,3 +1,4 @@
+import asyncio
 import feedparser
 import requests
 import configparser
@@ -20,6 +21,7 @@ class RSSEntry(BaseModel):
     summary: str
     date: Optional[str]
     content: str
+    ai_summary: Optional[str] = None
 
 class RSSResponse(BaseModel):
     total: int
@@ -91,21 +93,50 @@ async def root():
 @app.get("/rss/entries", response_model=RSSResponse, summary="获取RSS内容")
 async def get_rss_entries(
     days: int = Query(default=None, description="过滤最近几天的内容,不传则使用配置文件中的值"),
-    limit: int = Query(default=None, description="返回条目数量限制")
+    limit: int = Query(default=None, description="返回条目数量限制"),
+    summarize: bool = Query(default=True, description="是否使用AI生成摘要")
 ):
     try:
         urls = extractor.load_rss_feeds()
-        entries = extractor.fetch_rss_entries(urls)
-        filtered_entries = extractor.filter_by_date(entries, days)
-        
-        formatted = [extractor.format_entry(e) for e in filtered_entries]
-        
+        headers = {'User-Agent': extractor.config.get('headers', 'user_agent')}
+
+        from ai_summarizer import RSSSummarizer
+        summarizer = RSSSummarizer()
+
+        async def fetch_one_url(url: str):
+            response = await asyncio.to_thread(_fetch_one_url, url, headers)
+            filtered = extractor.filter_by_date(response, days)
+            formatted = [extractor.format_entry(e) for e in filtered]
+            return formatted
+
+        pending_summaries = []
+        all_formatted = []
+
+        for url in urls:
+            formatted = await fetch_one_url(url)
+            all_formatted.extend(formatted)
+
+            if summarize and formatted:
+                pending_summaries.append(
+                    asyncio.create_task(summarizer.summarize_entries_async(formatted))
+                )
+
+            await asyncio.sleep(1)
+
+        if pending_summaries:
+            await asyncio.gather(*pending_summaries)
+
         if limit:
-            formatted = formatted[:limit]
-        
-        return RSSResponse(total=len(formatted), entries=formatted)
+            all_formatted = all_formatted[:limit]
+
+        return RSSResponse(total=len(all_formatted), entries=all_formatted)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+def _fetch_one_url(url: str, headers: dict) -> list:
+    response = requests.get(url, headers=headers, timeout=30)
+    feed = feedparser.parse(response.text)
+    return list(feed.entries)
 
 @app.get("/rss/feeds", summary="获取配置的RSS源列表")
 async def get_rss_feeds():
