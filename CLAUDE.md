@@ -6,6 +6,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 MY-RSS is a learning project and RSS feed extraction/AI summarization service built with FastAPI. 模型可以任意提出改进建议，我会认真对待并实现。
 
+## Workflow
+
+- Use TDD for feature work: add or update focused tests first, implement the smallest change, then run the relevant tests.
+- Push by feature: after each independent feature is completed and verified, create one focused commit and `git push` immediately. Do not batch unrelated features into one commit/push.
+- Do not commit runtime state such as `fetch_state.json` or local databases.
+
 ## Run
 
 ```bash
