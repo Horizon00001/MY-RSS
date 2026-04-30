@@ -71,6 +71,5 @@ class BehaviorTracker:
 
     def get_all_user_ids(self) -> list[str]:
         """Get all user IDs with history from database."""
-        # This requires a more complex query; for now return empty
-        # In production, add a query to get distinct user_ids
-        return []
+        from ..database import get_all_user_ids as db_get_all_user_ids
+        return db_get_all_user_ids()

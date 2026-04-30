@@ -5,7 +5,6 @@ from unittest.mock import patch, MagicMock, AsyncMock
 from fastapi.testclient import TestClient
 
 from src.api import app
-from src.models import RSSEntry
 
 
 @pytest.fixture
@@ -31,25 +30,25 @@ class TestRSSFeeds:
 class TestRSSEntries:
     def test_get_entries_no_ai(self, client, mock_fetcher, mock_feed_parser, mock_state_manager):
         """Test /rss/entries without AI summarization."""
+        def _make_entry_getter():
+            data = {"title": "Test", "link": "https://example.com", "summary": "Summary", "content": "Content"}
+            return lambda k, default=None: data.get(k, default)
+
         mock_entry = MagicMock()
-        mock_entry.get.side_effect = lambda k: {
-            "title": "Test",
-            "link": "https://example.com",
-            "summary": "Summary",
-            "content": "Content",
-        }.get(k)
+        mock_entry.get.side_effect = _make_entry_getter()
 
         async def entry_generator():
             yield mock_entry
 
-        with patch("src.api.fetcher") as mock_fetcher_module:
-            mock_fetcher_module.Fetcher.return_value = mock_fetcher
-            mock_fetcher.fetch_all.return_value = entry_generator()
+        def mock_fetch_all(urls):
+            return entry_generator()
 
-            with patch("src.api.feed_parser", mock_feed_parser):
-                with patch("src.api.state_manager", mock_state_manager):
-                    mock_feed_parser.get_entry_date.return_value = None
+        mock_fetcher_instance = MagicMock()
+        mock_fetcher_instance.fetch_all = mock_fetch_all
 
+        with patch("src.api.get_fetcher", return_value=mock_fetcher_instance):
+            with patch("src.api.get_feed_parser", return_value=mock_feed_parser):
+                with patch("src.api.get_state_manager", return_value=mock_state_manager):
                     response = client.get("/rss/entries?use_ai=false")
                     assert response.status_code == 200
                     data = response.json()
@@ -58,59 +57,63 @@ class TestRSSEntries:
 
     def test_get_entries_with_limit(self, client, mock_fetcher, mock_feed_parser, mock_state_manager):
         """Test /rss/entries with limit parameter."""
+        from datetime import datetime, timedelta, timezone
+
+        def _make_entry_getter():
+            data = {"title": "Test", "link": "https://example.com", "summary": "Summary", "content": "Content"}
+            return lambda k, default=None: data.get(k, default)
+
         mock_entry = MagicMock()
-        mock_entry.get.side_effect = lambda k: {
-            "title": "Test",
-            "link": "https://example.com",
-            "summary": "Summary",
-            "content": "Content",
-        }.get(k)
+        mock_entry.get.side_effect = _make_entry_getter()
+
+        BEIJING_TZ = timezone(timedelta(hours=8))
 
         async def entry_generator():
             for _ in range(5):
                 yield mock_entry
 
-        with patch("src.api.fetcher") as mock_fetcher_module:
-            mock_fetcher_module.Fetcher.return_value = mock_fetcher
-            mock_fetcher.fetch_all.return_value = entry_generator()
+        def mock_fetch_all(urls):
+            return entry_generator()
 
-            with patch("src.api.feed_parser", mock_feed_parser):
-                with patch("src.api.state_manager", mock_state_manager):
-                    from datetime import datetime, timedelta, timezone
-                    BEIJING_TZ = timezone(timedelta(hours=8))
-                    mock_feed_parser.get_entry_date.return_value = datetime.now(BEIJING_TZ)
+        mock_fetcher_instance = MagicMock()
+        mock_fetcher_instance.fetch_all = mock_fetch_all
 
+        with patch("src.api.get_fetcher", return_value=mock_fetcher_instance):
+            with patch("src.api.get_feed_parser", return_value=mock_feed_parser):
+                with patch("src.api.get_state_manager", return_value=mock_state_manager):
                     response = client.get("/rss/entries?limit=2&use_ai=false")
                     assert response.status_code == 200
                     data = response.json()
                     assert data["total"] <= 2
 
     def test_get_entries_error_handling(self, client):
-        """Test error handling when fetching fails."""
-        async def failing_generator():
+        """Test error handling when fetching fails - returns empty results gracefully."""
+        async def error_generator():
             raise Exception("Fetch failed")
             yield
 
-        with patch("src.api.fetcher") as mock_fetcher_module:
-            mock_fetcher = MagicMock()
-            mock_fetcher.fetch_all.return_value = failing_generator()
-            mock_fetcher_module.Fetcher.return_value = mock_fetcher
+        def mock_fetch_all(urls):
+            return error_generator()
 
-            with patch("src.api.state_manager") as mock_state:
-                mock_state.last_fetch = None
-                mock_state.update_last_fetch.return_value = "2026-04-19 10:00:00 (北京时间)"
+        mock_fetcher_instance = MagicMock()
+        mock_fetcher_instance.fetch_all = mock_fetch_all
+        mock_feed_parser_instance = MagicMock()
+        mock_state_manager_instance = MagicMock()
 
-                with patch("src.api.feed_parser") as mock_parser:
-                    mock_parser.get_entry_date.return_value = None
-
+        with patch("src.api.get_fetcher", return_value=mock_fetcher_instance):
+            with patch("src.api.get_feed_parser", return_value=mock_feed_parser_instance):
+                with patch("src.api.get_state_manager", return_value=mock_state_manager_instance):
                     response = client.get("/rss/entries?use_ai=false")
-                    assert response.status_code == 500
+                    assert response.status_code == 200
+                    data = response.json()
+                    assert data["total"] == 0
+                    assert data["entries"] == []
 
 
 class TestRSSState:
     def test_get_state(self, client, mock_state_manager):
         """Test /rss/state endpoint."""
-        with patch("src.api.state_manager", mock_state_manager):
+        with patch("src.api.get_state_manager", return_value=mock_state_manager):
             response = client.get("/rss/state")
             assert response.status_code == 200
             assert "last_fetch" in response.json()
@@ -118,7 +121,7 @@ class TestRSSState:
 
     def test_reset_state(self, client, mock_state_manager):
         """Test /rss/state/reset endpoint."""
-        with patch("src.api.state_manager", mock_state_manager):
+        with patch("src.api.get_state_manager", return_value=mock_state_manager):
             response = client.post("/rss/state/reset")
             assert response.status_code == 200
             mock_state_manager.reset.assert_called_once()

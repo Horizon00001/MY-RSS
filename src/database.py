@@ -49,6 +49,9 @@ class Database:
     def _init_tables(self):
         """Initialize database tables."""
         with self.get_cursor() as cursor:
+            # Enable WAL mode for better concurrent read/write performance
+            cursor.execute("PRAGMA journal_mode=WAL;")
+
             # Articles table
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS articles (
@@ -225,3 +228,79 @@ def get_user_interacted_article_ids(user_id: str, limit: int = 500) -> set[str]:
             (user_id, limit),
         )
         return {row["article_id"] for row in cursor.fetchall()}
+
+
+def get_all_user_ids() -> list[str]:
+    """Get all distinct user IDs from interactions table."""
+    with get_db().get_cursor() as cursor:
+        cursor.execute("SELECT DISTINCT user_id FROM user_interactions")
+        return [row["user_id"] for row in cursor.fetchall()]
+
+
+def article_has_summary(article_id: str) -> bool:
+    """Check if an article already has an AI summary."""
+    with get_db().get_cursor() as cursor:
+        cursor.execute(
+            "SELECT ai_summary FROM articles WHERE id = ? AND ai_summary IS NOT NULL AND ai_summary != ''",
+            (article_id,),
+        )
+        return cursor.fetchone() is not None
+
+
+def update_article_summary(article_id: str, ai_summary: str) -> None:
+    """Update AI summary for a single article."""
+    with get_db().get_cursor() as cursor:
+        cursor.execute(
+            "UPDATE articles SET ai_summary = ? WHERE id = ?",
+            (ai_summary, article_id),
+        )
+
+
+def batch_update_summaries(summaries: list[dict]) -> int:
+    """Batch update AI summaries. Each dict must have 'id' and 'ai_summary'."""
+    with get_db().get_cursor() as cursor:
+        cursor.executemany(
+            "UPDATE articles SET ai_summary = :ai_summary WHERE id = :id",
+            summaries,
+        )
+        return cursor.rowcount
+
+
+def search_articles(keyword: str, limit: int = 50, offset: int = 0) -> list[dict]:
+    """Search articles by keyword in title, summary, and content."""
+    with get_db().get_cursor() as cursor:
+        pattern = f"%{keyword}%"
+        cursor.execute(
+            """
+            SELECT * FROM articles
+            WHERE title LIKE ? OR summary LIKE ? OR content LIKE ? OR ai_summary LIKE ?
+            ORDER BY published_at DESC
+            LIMIT ? OFFSET ?
+            """,
+            (pattern, pattern, pattern, pattern, limit, offset),
+        )
+        return [dict(row) for row in cursor.fetchall()]
+
+
+def get_feed_stats(days: int = 7) -> dict[str, dict]:
+    """Get per-feed article count stats for health monitoring."""
+    with get_db().get_cursor() as cursor:
+        cursor.execute(
+            """
+            SELECT source_name, source, COUNT(*) as count,
+                   MAX(published_at) as latest
+            FROM articles
+            WHERE published_at > datetime('now', '-' || ? || ' days')
+            GROUP BY source
+            ORDER BY count DESC
+            """,
+            (days,),
+        )
+        return {
+            row["source"]: {
+                "source_name": row["source_name"] or row["source"],
+                "count": row["count"],
+                "latest": row["latest"],
+            }
+            for row in cursor.fetchall()
+        }

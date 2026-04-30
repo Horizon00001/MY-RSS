@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MY-RSS WebSocket Test</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #1a1a2e; color: #eee; padding: 20px; }
+        .container { max-width: 900px; margin: 0 auto; }
+        h1 { text-align: center; color: #00d4ff; margin-bottom: 20px; }
+        .status-bar { display: flex; gap: 20px; justify-content: center; margin-bottom: 20px; }
+        .status-item { background: #16213e; padding: 10px 20px; border-radius: 8px; text-align: center; }
+        .status-item .label { font-size: 12px; color: #888; }
+        .status-item .value { font-size: 24px; font-weight: bold; color: #00d4ff; }
+        .status-item.connected .value { color: #00ff88; }
+        .status-item.disconnected .value { color: #ff4757; }
+        .controls { text-align: center; margin-bottom: 20px; }
+        button { background: #00d4ff; border: none; padding: 10px 30px; border-radius: 5px; cursor: pointer; font-size: 16px; margin: 5px; transition: all 0.3s; }
+        button:hover { background: #00a8cc; transform: scale(1.05); }
+        button:disabled { background: #444; cursor: not-allowed; transform: none; }
+        .log-container { background: #16213e; border-radius: 8px; height: 400px; overflow-y: auto; padding: 15px; }
+        .log-entry { padding: 8px 12px; margin-bottom: 8px; border-radius: 5px; font-size: 14px; border-left: 3px solid; }
+        .log-entry.connect { background: #1e3a5f; border-color: #00d4ff; }
+        .log-entry.entry { background: #1a4d2e; border-color: #00ff88; }
+        .log-entry.progress { background: #3d3d1a; border-color: #ffaa00; }
+        .log-entry.error { background: #4d1a1a; border-color: #ff4757; }
+        .log-entry .time { color: #888; font-size: 12px; margin-right: 10px; }
+        .log-entry .type { font-weight: bold; margin-right: 10px; }
+        .entry-title { color: #00ff88; font-weight: bold; }
+        .entry-summary { color: #ccc; font-size: 13px; margin-top: 5px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>MY-RSS WebSocket Test</h1>
+        <div class="status-bar">
+            <div class="status-item disconnected" id="connStatus">
+                <div class="label">Connection</div>
+                <div class="value" id="connValue">Disconnected</div>
+            </div>
+            <div class="status-item">
+                <div class="label">Messages</div>
+                <div class="value" id="msgCount">0</div>
+            </div>
+            <div class="status-item">
+                <div class="label">New Entries</div>
+                <div class="value" id="entryCount">0</div>
+            </div>
+        </div>
+        <div class="controls">
+            <button id="connectBtn" onclick="connect()">Connect</button>
+            <button id="disconnectBtn" onclick="disconnect()" disabled>Disconnect</button>
+            <button id="pingBtn" onclick="sendPing()" disabled>Ping</button>
+            <button id="fetchBtn" onclick="triggerFetch()" disabled>Trigger Fetch</button>
+        </div>
+        <div class="log-container" id="logContainer"></div>
+    </div>
+    <script>
+        let ws;
+        let msgCount = 0;
+        let entryCount = 0;
+
+        function log(message, type = 'info') {
+            const container = document.getElementById('logContainer');
+            const entry = document.createElement('div');
+            entry.className = `log-entry ${type}`;
+            const time = new Date().toLocaleTimeString();
+            entry.innerHTML = `<span class="time">${time}</span><span class="type">${type.toUpperCase()}</span><span>${message}</span>`;
+            container.insertBefore(entry, container.firstChild);
+            msgCount++;
+            document.getElementById('msgCount').textContent = msgCount;
+        }
+
+        function updateStatus(connected) {
+            const status = document.getElementById('connStatus');
+            const value = document.getElementById('connValue');
+            const connectBtn = document.getElementById('connectBtn');
+            const disconnectBtn = document.getElementById('disconnectBtn');
+            const pingBtn = document.getElementById('pingBtn');
+            const fetchBtn = document.getElementById('fetchBtn');
+
+            if (connected) {
+                status.className = 'status-item connected';
+                value.textContent = 'Connected';
+                connectBtn.disabled = true;
+                disconnectBtn.disabled = false;
+                pingBtn.disabled = false;
+                fetchBtn.disabled = false;
+            } else {
+                status.className = 'status-item disconnected';
+                value.textContent = 'Disconnected';
+                connectBtn.disabled = false;
+                disconnectBtn.disabled = true;
+                pingBtn.disabled = true;
+                fetchBtn.disabled = true;
+            }
+        }
+
+        function connect() {
+            const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+            const host = window.location.host;
+            ws = new WebSocket(`${protocol}//${host}/ws/rss`);
+
+            ws.onopen = () => {
+                log('WebSocket connected', 'connect');
+                updateStatus(true);
+            };
+
+            ws.onmessage = (event) => {
+                const data = JSON.parse(event.data);
+                if (data.type === 'new_entries' || data.type === 'summarized_entry') {
+                    entryCount += data.count || 1;
+                    document.getElementById('entryCount').textContent = entryCount;
+                }
+                log(JSON.stringify(data, null, 2), data.type || 'info');
+            };
+
+            ws.onclose = () => {
+                log('WebSocket disconnected', 'connect');
+                updateStatus(false);
+            };
+
+            ws.onerror = (error) => {
+                log('WebSocket error: ' + error, 'error');
+            };
+        }
+
+        function disconnect() {
+            if (ws) {
+                ws.close();
+            }
+        }
+
+        function sendPing() {
+            if (ws) {
+                ws.send(JSON.stringify({ type: 'ping' }));
+                log('Sent ping', 'progress');
+            }
+        }
+
+        function triggerFetch() {
+            if (ws) {
+                ws.send(JSON.stringify({ type: 'fetch' }));
+                log('Triggered fetch', 'progress');
+            }
+        }
+    </script>
+</body>
+</html>

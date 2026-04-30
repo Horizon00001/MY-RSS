@@ -1,0 +1,445 @@
+/* ═══════════════════════════════════════════════
+   MY-RSS — INK & PAPER
+   编辑部美学：思源宋体 · 朱砂红 · 纸纹
+   ═══════════════════════════════════════════════ */
+
+:root {
+  --paper: #faf7f2;
+  --paper-warm: #f3efe6;
+  --ink: #1a1714;
+  --ink-soft: #3d3935;
+  --ink-muted: #8a837c;
+  --ink-faint: #c4bdb4;
+  --vermillion: #c41e3a;
+  --vermillion-dark: #9a1630;
+  --vermillion-glow: rgba(196,30,58,.08);
+  --indigo: #3a4f8c;
+  --indigo-glow: rgba(58,79,140,.06);
+  --jade: #2d6a4f;
+  --radius: 0;
+  --transition: .25s cubic-bezier(.4,0,.2,1);
+}
+
+/* ─── Paper Texture ──────────────────────────── */
+.paper-texture {
+  position: fixed; inset: 0; z-index: 0; pointer-events: none;
+  background:
+    repeating-linear-gradient(0deg, transparent, transparent 2px, rgba(26,23,20,.008) 2px, rgba(26,23,20,.008) 4px),
+    repeating-linear-gradient(90deg, transparent, transparent 1px, rgba(26,23,20,.006) 1px, rgba(26,23,20,.006) 2px);
+  opacity: .6;
+}
+
+/* ─── Reset ──────────────────────────────────── */
+*, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+
+body {
+  font-family: "Noto Sans SC", "Source Han Sans SC", sans-serif;
+  background: var(--paper);
+  color: var(--ink);
+  line-height: 1.7;
+  min-height: 100vh;
+  position: relative;
+  z-index: 1;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ─── Masthead ───────────────────────────────── */
+.masthead {
+  padding: 48px 16px 0;
+  text-align: center;
+  position: relative;
+  z-index: 2;
+}
+.masthead-inner { max-width: 720px; margin: 0 auto; }
+.masthead-rule {
+  height: 1px; background: var(--ink);
+  opacity: .12; margin: 0 auto;
+}
+.masthead-rule:first-child { max-width: 100%; }
+.masthead-content {
+  display: flex; align-items: baseline; justify-content: center;
+  gap: 0; padding: 28px 0;
+  position: relative;
+}
+.masthead-vol {
+  font-family: "JetBrains Mono", monospace;
+  font-size: 11px; font-weight: 500; color: var(--ink-muted);
+  writing-mode: vertical-rl; letter-spacing: .1em;
+  position: absolute; left: 0; top: 20px;
+  text-transform: uppercase;
+}
+.masthead-title {
+  font-family: "Noto Serif SC", serif;
+  font-size: clamp(48px, 8vw, 88px);
+  font-weight: 900; line-height: 1;
+  letter-spacing: -.02em;
+  color: var(--ink);
+}
+.masthead-sub {
+  font-family: "Noto Serif SC", serif;
+  font-size: 16px; font-weight: 400; color: var(--ink-muted);
+  writing-mode: vertical-rl; letter-spacing: .2em;
+  position: absolute; right: 0; top: 28px;
+}
+.masthead-nav {
+  display: flex; justify-content: center; align-items: center;
+  gap: 16px; padding: 14px 0;
+}
+.masthead-nav a {
+  font-family: "Noto Serif SC", serif;
+  font-size: 15px; font-weight: 600; color: var(--ink-muted);
+  text-decoration: none; letter-spacing: .04em;
+  transition: color var(--transition);
+  padding: 2px 0;
+  border-bottom: 2px solid transparent;
+}
+.masthead-nav a:hover,
+.masthead-nav a.active {
+  color: var(--vermillion);
+  border-bottom-color: var(--vermillion);
+}
+.nav-sep { color: var(--ink-faint); font-size: 14px; }
+
+/* ─── Container ──────────────────────────────── */
+.container {
+  max-width: 720px;
+  margin: 0 auto;
+  padding: 40px 16px 80px;
+  position: relative; z-index: 2;
+}
+
+/* ─── Stats Row ──────────────────────────────── */
+.stats-row {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 1px;
+  background: var(--ink);
+  border: 1px solid var(--ink);
+  margin-bottom: 40px;
+}
+.stat-card {
+  background: var(--paper);
+  padding: 24px 16px; text-align: center;
+  transition: background var(--transition);
+}
+.stat-card:hover { background: var(--paper-warm); }
+.stat-card .value {
+  font-family: "Noto Serif SC", serif;
+  font-size: 40px; font-weight: 900; line-height: 1;
+  letter-spacing: -.02em;
+}
+.stat-card .value.blue { color: var(--indigo); }
+.stat-card .value.green { color: var(--jade); }
+.stat-card .label {
+  font-size: 12px; color: var(--ink-muted); margin-top: 8px;
+  letter-spacing: .1em; text-transform: uppercase;
+}
+
+/* ─── Search ─────────────────────────────────── */
+.search-bar {
+  display: flex; gap: 0; margin-bottom: 40px;
+  border-bottom: 2px solid var(--ink);
+}
+.search-bar input {
+  flex: 1; background: transparent; border: none;
+  color: var(--ink); padding: 14px 0; font-size: 18px;
+  font-family: "Noto Serif SC", serif; outline: none;
+  letter-spacing: .02em;
+}
+.search-bar input::placeholder { color: var(--ink-faint); }
+.search-bar button, .btn {
+  background: transparent; color: var(--ink);
+  border: none; padding: 14px 24px; font-size: 13px;
+  cursor: pointer; font-weight: 600; letter-spacing: .1em;
+  text-transform: uppercase; font-family: "Noto Sans SC", sans-serif;
+  transition: all var(--transition);
+  border-bottom: 2px solid transparent;
+  margin-bottom: -2px;
+}
+.search-bar button:hover, .btn:hover { color: var(--vermillion); }
+.btn-outline { opacity: .5; }
+.btn-outline:hover { opacity: 1; }
+.btn-sm { padding: 8px 16px; font-size: 12px; }
+.btn-sm.vermillion { color: var(--vermillion); }
+
+/* ─── Cards ──────────────────────────────────── */
+.card {
+  display: block; padding: 0 0 28px 0; margin-bottom: 28px;
+  border-bottom: 1px solid var(--ink-faint);
+  cursor: pointer; transition: all var(--transition);
+  animation: fadeUp .5s ease both;
+}
+.card:nth-child(1) { animation-delay: .05s; }
+.card:nth-child(2) { animation-delay: .1s; }
+.card:nth-child(3) { animation-delay: .15s; }
+.card:nth-child(4) { animation-delay: .2s; }
+.card:nth-child(5) { animation-delay: .25s; }
+.card:nth-child(6) { animation-delay: .3s; }
+.card:nth-child(7) { animation-delay: .35s; }
+.card:nth-child(8) { animation-delay: .4s; }
+.card:hover { padding-left: 20px; border-bottom-color: var(--vermillion); }
+
+.card .source {
+  font-family: "JetBrains Mono", monospace;
+  font-size: 10px; font-weight: 600; color: var(--vermillion);
+  text-transform: uppercase; letter-spacing: .15em; margin-bottom: 8px;
+}
+.card h3 {
+  font-family: "Noto Serif SC", serif;
+  font-size: 22px; font-weight: 700; line-height: 1.35;
+  letter-spacing: -.01em; margin-bottom: 8px;
+  color: var(--ink);
+}
+.card .meta {
+  font-family: "JetBrains Mono", monospace;
+  font-size: 11px; color: var(--ink-muted);
+  display: flex; align-items: center; gap: 12px;
+}
+.card .summary {
+  font-family: "Noto Serif SC", serif;
+  font-size: 15px; line-height: 1.7; color: var(--ink-soft);
+  margin-top: 10px;
+}
+.ai-badge {
+  display: inline-flex; align-items: center; gap: 4px;
+  font-family: "JetBrains Mono", monospace;
+  font-size: 10px; font-weight: 600; letter-spacing: .08em;
+  color: var(--indigo); background: var(--indigo-glow);
+  padding: 2px 8px; border: 1px solid rgba(58,79,140,.15);
+}
+.ai-badge::before {
+  content: "◆"; font-size: 6px; color: var(--indigo);
+}
+
+/* ─── Article Detail ─────────────────────────── */
+.article-detail { animation: fadeUp .35s ease both; }
+.article-detail .back {
+  display: inline-block; font-family: "JetBrains Mono", monospace;
+  font-size: 11px; color: var(--ink-muted); cursor: pointer;
+  text-decoration: none; letter-spacing: .08em;
+  margin-bottom: 32px; transition: color var(--transition);
+}
+.article-detail .back:hover { color: var(--vermillion); }
+
+.article-detail h2 {
+  font-family: "Noto Serif SC", serif;
+  font-size: 32px; font-weight: 900; line-height: 1.25;
+  letter-spacing: -.02em; margin-bottom: 12px;
+}
+.article-detail .dateline {
+  font-family: "JetBrains Mono", monospace;
+  font-size: 11px; color: var(--ink-muted);
+  margin-bottom: 32px; letter-spacing: .06em;
+}
+
+.ai-box {
+  background: var(--indigo-glow); border-left: 3px solid var(--indigo);
+  padding: 20px 24px; margin: 24px 0; position: relative;
+}
+.ai-box h4 {
+  font-family: "JetBrains Mono", monospace;
+  font-size: 10px; font-weight: 700; color: var(--indigo);
+  letter-spacing: .15em; margin-bottom: 10px;
+}
+.ai-box p {
+  font-family: "Noto Serif SC", serif;
+  font-size: 15px; line-height: 1.8; color: var(--ink-soft);
+}
+
+.article-detail .content {
+  margin-top: 24px;
+  font-family: "Noto Serif SC", serif;
+  font-size: 15px; line-height: 1.85; color: var(--ink);
+  white-space: pre-wrap;
+}
+
+.read-original {
+  display: inline-block; margin-top: 32px;
+  font-family: "JetBrains Mono", monospace;
+  font-size: 12px; font-weight: 600; color: var(--vermillion);
+  text-decoration: none; letter-spacing: .08em;
+  border-bottom: 2px solid var(--vermillion);
+  padding-bottom: 2px; transition: all var(--transition);
+}
+.read-original:hover { color: var(--vermillion-dark); border-color: var(--vermillion-dark); }
+
+/* ─── Pagination ─────────────────────────────── */
+.pagination {
+  display: flex; gap: 1px; justify-content: center;
+  margin-top: 48px; background: var(--ink);
+}
+.pagination button {
+  font-family: "JetBrains Mono", monospace;
+  font-size: 13px; background: var(--paper); color: var(--ink);
+  border: none; padding: 12px 18px; cursor: pointer;
+  font-weight: 500; transition: all var(--transition);
+}
+.pagination button:hover { color: var(--vermillion); }
+.pagination button.active {
+  background: var(--ink); color: var(--paper);
+}
+
+/* ─── Feed List ──────────────────────────────── */
+.feed-list { margin: 16px 0; }
+.feed-item {
+  display: flex; justify-content: space-between; align-items: flex-start;
+  padding: 16px 0; border-bottom: 1px solid var(--ink-faint);
+  font-size: 14px; gap: 16px;
+}
+.feed-item .name {
+  font-family: "Noto Serif SC", serif;
+  font-weight: 600; font-size: 15px; margin-bottom: 2px;
+}
+.feed-item .url {
+  font-family: "JetBrains Mono", monospace;
+  font-size: 11px; color: var(--ink-muted);
+}
+.badge {
+  display: inline-flex; align-items: center; gap: 4px;
+  font-family: "JetBrains Mono", monospace;
+  font-size: 10px; font-weight: 600; letter-spacing: .06em;
+  padding: 4px 10px; white-space: nowrap;
+}
+.badge.active {
+  color: var(--jade); background: rgba(45,106,79,.06);
+  border: 1px solid rgba(45,106,79,.2);
+}
+.badge.inactive {
+  color: var(--ink-muted); background: transparent;
+  border: 1px solid var(--ink-faint);
+}
+.badge.active::before { content: "●"; font-size: 6px; }
+.badge.inactive::before { content: "○"; font-size: 6px; }
+
+/* ─── Feed Actions ───────────────────────────── */
+.feed-actions {
+  display: flex; gap: 12px; margin: 28px 0;
+}
+.feed-actions .btn {
+  border: 2px solid var(--ink); padding: 12px 20px;
+  font-family: "JetBrains Mono", monospace; font-size: 11px;
+  background: transparent; cursor: pointer;
+  letter-spacing: .08em; transition: all var(--transition);
+}
+.feed-actions .btn:hover { background: var(--ink); color: var(--paper); }
+
+/* ─── Health Grid ────────────────────────────── */
+.health-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: 1px; background: var(--ink-faint);
+  margin-top: 24px; border: 1px solid var(--ink-faint);
+}
+.health-card {
+  background: var(--paper);
+  padding: 20px 24px;
+  transition: background var(--transition);
+}
+.health-card:hover { background: var(--paper-warm); }
+.health-card .name {
+  font-family: "Noto Serif SC", serif;
+  font-weight: 700; font-size: 15px; margin-bottom: 8px;
+}
+.health-card .stats {
+  font-family: "JetBrains Mono", monospace;
+  font-size: 11px; color: var(--ink-muted);
+  line-height: 1.6;
+}
+
+/* ─── Empty & Loading ────────────────────────── */
+.empty {
+  text-align: center; padding: 80px 20px; color: var(--ink-muted);
+}
+.empty h3 {
+  font-family: "Noto Serif SC", serif;
+  font-size: 24px; font-weight: 700; margin-bottom: 8px;
+  color: var(--ink-soft);
+}
+
+.loading {
+  text-align: center; padding: 80px 20px;
+  font-family: "JetBrains Mono", monospace;
+  font-size: 12px; color: var(--ink-faint);
+  letter-spacing: .15em;
+  animation: pulse 1.5s ease infinite;
+}
+
+.error {
+  background: var(--vermillion-glow);
+  border-left: 3px solid var(--vermillion);
+  color: var(--vermillion-dark);
+  padding: 16px 20px; margin: 16px 0;
+  font-family: "JetBrains Mono", monospace; font-size: 12px;
+}
+
+/* ─── Toast ──────────────────────────────────── */
+.toast {
+  position: fixed; bottom: 24px; right: 24px;
+  background: var(--ink); color: var(--paper);
+  padding: 14px 24px; font-size: 13px; z-index: 100;
+  font-family: "Noto Serif SC", serif;
+  animation: slideUp .35s cubic-bezier(.16,1,.3,1);
+  box-shadow: 4px 4px 0 rgba(26,23,20,.08);
+}
+.toast.success { background: var(--jade); }
+.toast.error { background: var(--vermillion); }
+
+/* ─── Colophon ───────────────────────────────── */
+.colophon {
+  text-align: center; padding: 40px 16px 60px;
+  position: relative; z-index: 2;
+}
+.colophon .masthead-rule { max-width: 120px; margin-bottom: 16px; }
+.colophon p {
+  font-family: "JetBrains Mono", monospace;
+  font-size: 10px; color: var(--ink-muted);
+  letter-spacing: .06em;
+}
+
+/* ─── Section Headings ───────────────────────── */
+h2 {
+  font-family: "Noto Serif SC", serif;
+  font-size: 28px; font-weight: 900; letter-spacing: -.01em;
+  margin-bottom: 16px;
+}
+h3 {
+  font-family: "Noto Serif SC", serif;
+  font-size: 18px; font-weight: 700;
+  margin: 32px 0 12px;
+}
+h4 {
+  font-family: "JetBrains Mono", monospace;
+  font-size: 11px; font-weight: 600;
+  color: var(--ink-muted);
+  letter-spacing: .12em; text-transform: uppercase;
+  margin-bottom: 8px;
+}
+
+/* ─── Link ───────────────────────────────────── */
+a { color: var(--vermillion); text-decoration: none; }
+a:hover { color: var(--vermillion-dark); }
+
+/* ─── Animations ─────────────────────────────── */
+@keyframes fadeUp {
+  from { opacity: 0; transform: translateY(16px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+@keyframes slideUp {
+  from { opacity: 0; transform: translateY(12px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+@keyframes pulse {
+  0%, 100% { opacity: .4; }
+  50%      { opacity: 1; }
+}
+
+/* ─── Responsive ─────────────────────────────── */
+@media (max-width: 640px) {
+  .masthead-title { font-size: 40px; }
+  .masthead-vol, .masthead-sub { display: none; }
+  .stats-row { grid-template-columns: repeat(2, 1fr); }
+  .health-grid { grid-template-columns: 1fr; }
+  .card h3 { font-size: 18px; }
+  .article-detail h2 { font-size: 24px; }
+  .card:hover { padding-left: 8px; }
+}

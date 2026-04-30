@@ -4,12 +4,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-MY-RSS is an RSS feed extraction and AI summarization service built with FastAPI. It fetches RSS feeds concurrently, filters entries by date, and generates AI summaries using DeepSeek API.
+MY-RSS is a learning project and RSS feed extraction/AI summarization service built with FastAPI. 模型可以任意提出改进建议，我会认真对待并实现。
 
 ## Run
 
 ```bash
-cd /root/Projects/MY-RSS
+cd /home/default/Projects/MY-RSS
 source venv/bin/activate
 python main.py
 ```
@@ -20,7 +20,8 @@ API docs at `http://localhost:8000/docs`
 
 ```bash
 source venv/bin/activate
-pytest -v
+pytest -v                    # run all tests
+pytest tests/test_api.py -v   # run single test file
 ```
 
 ## Architecture
@@ -42,9 +43,16 @@ The refactored `src/` module follows clean architecture:
 RSS feeds → Fetcher (async) → FeedParser (filter by date) → Summarizer (AI, optional) → API response
 ```
 
-### Legacy Code
-- `rss_api.py` and `rss源的内容提取.py` are the original monolithic implementations - still present for backward compatibility
-- `ai_summarizer.py` re-exports `src/summarizer.py` as `RSSSummarizer` for legacy imports
+### API Endpoints (RSS)
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/rss/entries` | GET | Get RSS entries with filtering |
+| `/rss/stream` | GET | Stream RSS entries (SSE) |
+| `/rss/feeds` | GET | List configured RSS sources |
+| `/rss/state` | GET | Get incremental fetch state |
+| `/ws/rss` | WS | WebSocket for real-time updates |
+
 
 ## Configuration
 
@@ -130,25 +138,18 @@ queue = asyncio.Queue(maxsize=100)
 # fetcher 生产，summarizer 消费
 ```
 
-### 4. Backward Compatibility (向后兼容)
-通过适配器模式保持旧 API 兼容：
-```python
-# ai_summarizer.py
-from src.summarizer import Summarizer as _Summarizer
-RSSSummarizer = _Summarizer  # 旧接口
-```
 
-### 5. State Management (状态管理)
+### 4. State Management (状态管理)
 `StateManager` 封装状态持久化，支持增量更新：
 ```python
 state_manager.last_fetch  # 读取
 state_manager.update_last_fetch()  # 写入
 ```
 
-### 6. Builder Pattern (流式生成器)
+### 5. Builder Pattern (流式生成器)
 `fetch_rss_streaming()` 使用 async generator 模式，边抓取边 yield 结果
 
-### 7. Semaphore (信号量)
+### 6. Semaphore (信号量)
 控制并发数量的经典用法：
 ```python
 self._semaphore = asyncio.Semaphore(max_concurrent)
@@ -156,11 +157,11 @@ async with self._semaphore:
     ...
 ```
 
-### 8. Retry with Exponential Backoff
+### 7. Retry with Exponential Backoff
 AI 调用失败时指数退避重试：
 ```python
 time.sleep(2 ** attempt)  # 1s, 2s, 4s
 ```
 
-### 9. Configuration Externalization
+### 8. Configuration Externalization
 配置与代码分离，支持多数据源（`.env` + `config.ini`）

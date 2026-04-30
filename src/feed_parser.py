@@ -1,5 +1,6 @@
 """RSS feed parsing logic."""
 
+import re
 from datetime import datetime, timezone, timedelta
 from typing import Any, Optional
 
@@ -14,13 +15,22 @@ class FeedParser:
 
     DATE_FIELDS = ["updated", "published", "date", "pubDate"]
 
+    _html_re = re.compile(r"<[^>]+>")
+
+    @classmethod
+    def strip_html(cls, text: str) -> str:
+        """Remove HTML tags and normalize whitespace."""
+        if not text:
+            return ""
+        return cls._html_re.sub("", text).strip()
+
     def parse_entry(self, entry: Any) -> dict[str, Any]:
         """Convert feedparser entry to dict format."""
         return {
-            "title": entry.get("title", ""),
+            "title": self.strip_html(entry.get("title", "")),
             "link": entry.get("link", ""),
-            "summary": entry.get("summary", ""),
-            "content": entry.get("content", ""),
+            "summary": self.strip_html(entry.get("summary", "")),
+            "content": self.strip_html(entry.get("content", "")),
             "updated": getattr(entry, "updated", None),
             "published": getattr(entry, "published", None),
         }

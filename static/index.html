@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>MY-RSS — 智能阅读</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Serif+SC:wght@400;600;700;900&family=Noto+Sans+SC:wght@300;400;500&family=JetBrains+Mono:ital,wght@0,400;0,500;0,700;1,400&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+
+<div class="paper-texture"></div>
+
+<header class="masthead">
+  <div class="masthead-inner">
+    <div class="masthead-rule"></div>
+    <div class="masthead-content">
+      <span class="masthead-vol">Vol. I</span>
+      <h1 class="masthead-title">MY—RSS</h1>
+      <span class="masthead-sub">智能阅读</span>
+    </div>
+    <div class="masthead-rule"></div>
+    <nav class="masthead-nav">
+      <a href="#/" class="nav-link" data-route="/">文章</a>
+      <span class="nav-sep">/</span>
+      <a href="#/feeds" class="nav-link" data-route="/feeds">源管理</a>
+      <span class="nav-sep">/</span>
+      <a href="#/health" class="nav-link" data-route="/health">健康</a>
+    </nav>
+    <div class="masthead-rule"></div>
+  </div>
+</header>
+
+<main id="app" class="container"></main>
+
+<footer class="colophon">
+  <div class="masthead-rule"></div>
+  <p>MY-RSS &copy; 2026 &mdash; Built with FastAPI &amp; Vanilla JS</p>
+</footer>
+
+<script src="/static/js/app.js"></script>
+</body>
+</html>

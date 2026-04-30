@@ -23,8 +23,8 @@ class Settings(BaseSettings):
 
     # AI summarizer settings
     api_key: str = ""
-    api_url: str = "https://api.deep.deepseek.com/v1"
-    model: str = "deepseek-chat"
+    api_url: str = "https://zenmux.ai/api/anthropic"
+    model: str = "deepseek/deepseek-v4-pro-free"
     max_concurrent: int = 20
 
     # Paths
@@ -34,6 +34,12 @@ class Settings(BaseSettings):
 
     # Semaphore limit for concurrent fetches
     semaphore_limit: int = 20
+
+    # Polling interval for background watcher (seconds)
+    polling_interval_seconds: int = 300
+
+    # Logging
+    log_level: str = "INFO"
 
     # Database settings
     db_host: Optional[str] = None
