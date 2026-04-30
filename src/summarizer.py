@@ -79,7 +79,6 @@ class Summarizer:
                     json={
                         "model": self.model,
                         "messages": [{"role": "user", "content": prompt}],
-                        "max_completion_tokens": 200,
                     },
                     timeout=60,
                 )

@@ -28,6 +28,7 @@ from .database import (
     get_db,
     batch_update_summaries,
     list_recent_articles,
+    list_feed_statuses,
     search_articles,
     get_feed_stats,
 )
@@ -542,15 +543,33 @@ async def get_feeds_health(
 ):
     """Get per-feed health stats: article counts and latest fetch times."""
     stats = get_feed_stats(days=days)
+    statuses = list_feed_statuses()
     configured_urls = set(settings.rss_feeds.values())
     active_urls = set(stats.keys())
+
+    feeds = {}
+    for url in configured_urls:
+        article_stats = stats.get(url, {})
+        status = statuses.get(url, {})
+        feeds[url] = {
+            "source_name": article_stats.get("source_name") or url,
+            "count": article_stats.get("count", 0),
+            "latest": article_stats.get("latest"),
+            "last_status_code": status.get("last_status_code"),
+            "last_success_at": status.get("last_success_at"),
+            "last_error_at": status.get("last_error_at"),
+            "last_error": status.get("last_error"),
+            "consecutive_failures": status.get("consecutive_failures", 0),
+            "average_fetch_ms": status.get("average_fetch_ms"),
+            "cache_enabled": bool(status.get("etag") or status.get("last_modified")),
+        }
 
     return {
         "total_feeds": len(settings.rss_feeds),
         "active_feeds": len(active_urls),
         "inactive_feeds": len(configured_urls - active_urls),
         "inactive_feed_urls": list(configured_urls - active_urls),
-        "feeds": stats,
+        "feeds": feeds,
     }
 
 

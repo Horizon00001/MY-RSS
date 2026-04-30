@@ -27,6 +27,28 @@ class TestRSSFeeds:
         assert "feeds" in response.json()
         assert isinstance(response.json()["feeds"], list)
 
+    def test_get_feeds_health_includes_cache_and_error_status(self, client):
+        with patch("src.api.settings.rss_feeds", {"Example": "https://example.com/rss"}):
+            with patch("src.api.get_feed_stats", return_value={}):
+                with patch("src.api.list_feed_statuses", return_value={
+                    "https://example.com/rss": {
+                        "etag": '"abc"',
+                        "last_status_code": 304,
+                        "last_success_at": "2026-05-01 10:00:00",
+                        "last_error_at": None,
+                        "last_error": None,
+                        "consecutive_failures": 0,
+                        "average_fetch_ms": 12.3,
+                    }
+                }):
+                    response = client.get("/rss/feeds/health")
+
+        assert response.status_code == 200
+        feed = response.json()["feeds"]["https://example.com/rss"]
+        assert feed["last_status_code"] == 304
+        assert feed["cache_enabled"] is True
+        assert feed["average_fetch_ms"] == 12.3
+
 
 class TestLocalArticles:
     def test_get_local_articles(self, client):

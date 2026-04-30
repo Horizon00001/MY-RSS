@@ -122,6 +122,50 @@ class TestArticleHasSummary:
         finally:
             db_mod._db = old_db
 
+
+class TestFeedStatus:
+    def test_record_success_stores_cache_headers(self, tmp_path):
+        db = Database(db_path=str(tmp_path / "test.db"))
+        import src.database as db_mod
+        old_db = db_mod._db
+        db_mod._db = db
+        try:
+            from src.database import get_feed_status, record_feed_success
+
+            record_feed_success(
+                "https://example.com/rss",
+                status_code=200,
+                etag='"abc"',
+                last_modified="Wed, 01 May 2026 10:00:00 GMT",
+                fetch_ms=123.4,
+            )
+
+            status = get_feed_status("https://example.com/rss")
+            assert status["etag"] == '"abc"'
+            assert status["last_modified"] == "Wed, 01 May 2026 10:00:00 GMT"
+            assert status["last_status_code"] == 200
+            assert status["consecutive_failures"] == 0
+            assert status["average_fetch_ms"] == 123.4
+        finally:
+            db_mod._db = old_db
+
+    def test_record_error_increments_failures(self, tmp_path):
+        db = Database(db_path=str(tmp_path / "test.db"))
+        import src.database as db_mod
+        old_db = db_mod._db
+        db_mod._db = db
+        try:
+            from src.database import get_feed_status, record_feed_error
+
+            record_feed_error("https://example.com/rss", "timeout")
+            record_feed_error("https://example.com/rss", "timeout again")
+
+            status = get_feed_status("https://example.com/rss")
+            assert status["last_error"] == "timeout again"
+            assert status["consecutive_failures"] == 2
+        finally:
+            db_mod._db = old_db
+
     def test_false_when_no_summary(self, tmp_path):
         db = Database(db_path=str(tmp_path / "test.db"))
         import src.database as db_mod

@@ -88,6 +88,20 @@ class Database:
                 )
             """)
 
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS feed_status (
+                    feed_url TEXT PRIMARY KEY,
+                    etag TEXT,
+                    last_modified TEXT,
+                    last_status_code INTEGER,
+                    last_success_at TIMESTAMP,
+                    last_error_at TIMESTAMP,
+                    last_error TEXT,
+                    consecutive_failures INTEGER DEFAULT 0,
+                    average_fetch_ms REAL
+                )
+            """)
+
             # Create indexes
             cursor.execute("""
                 CREATE INDEX IF NOT EXISTS idx_articles_published_at
@@ -196,6 +210,89 @@ def list_recent_articles(limit: int = 20, offset: int = 0, days: int = 30) -> li
             (days, limit, offset),
         )
         return [dict(row) for row in cursor.fetchall()]
+
+
+def get_feed_status(feed_url: str) -> Optional[dict]:
+    """Get cached HTTP and health status for a feed."""
+    with get_db().get_cursor() as cursor:
+        cursor.execute("SELECT * FROM feed_status WHERE feed_url = ?", (feed_url,))
+        row = cursor.fetchone()
+        return dict(row) if row else None
+
+
+def record_feed_success(
+    feed_url: str,
+    status_code: int,
+    etag: Optional[str] = None,
+    last_modified: Optional[str] = None,
+    fetch_ms: Optional[float] = None,
+) -> None:
+    """Record a successful feed fetch, including 304 cache hits."""
+    previous = get_feed_status(feed_url) or {}
+    previous_avg = previous.get("average_fetch_ms")
+    if fetch_ms is not None and previous_avg is not None:
+        average_fetch_ms = round((float(previous_avg) * 0.8) + (fetch_ms * 0.2), 2)
+    else:
+        average_fetch_ms = fetch_ms if fetch_ms is not None else previous_avg
+
+    with get_db().get_cursor() as cursor:
+        cursor.execute(
+            """
+            INSERT INTO feed_status (
+                feed_url, etag, last_modified, last_status_code, last_success_at,
+                last_error_at, last_error, consecutive_failures, average_fetch_ms
+            ) VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP, NULL, NULL, 0, ?)
+            ON CONFLICT(feed_url) DO UPDATE SET
+                etag = COALESCE(excluded.etag, feed_status.etag),
+                last_modified = COALESCE(excluded.last_modified, feed_status.last_modified),
+                last_status_code = excluded.last_status_code,
+                last_success_at = CURRENT_TIMESTAMP,
+                last_error = NULL,
+                consecutive_failures = 0,
+                average_fetch_ms = COALESCE(excluded.average_fetch_ms, feed_status.average_fetch_ms)
+            """,
+            (feed_url, etag, last_modified, status_code, average_fetch_ms),
+        )
+
+
+def record_feed_error(
+    feed_url: str,
+    error: str,
+    status_code: Optional[int] = None,
+    fetch_ms: Optional[float] = None,
+) -> None:
+    """Record a failed feed fetch."""
+    previous = get_feed_status(feed_url) or {}
+    failures = int(previous.get("consecutive_failures") or 0) + 1
+    previous_avg = previous.get("average_fetch_ms")
+    if fetch_ms is not None and previous_avg is not None:
+        average_fetch_ms = round((float(previous_avg) * 0.8) + (fetch_ms * 0.2), 2)
+    else:
+        average_fetch_ms = fetch_ms if fetch_ms is not None else previous_avg
+
+    with get_db().get_cursor() as cursor:
+        cursor.execute(
+            """
+            INSERT INTO feed_status (
+                feed_url, last_status_code, last_error_at, last_error,
+                consecutive_failures, average_fetch_ms
+            ) VALUES (?, ?, CURRENT_TIMESTAMP, ?, ?, ?)
+            ON CONFLICT(feed_url) DO UPDATE SET
+                last_status_code = excluded.last_status_code,
+                last_error_at = CURRENT_TIMESTAMP,
+                last_error = excluded.last_error,
+                consecutive_failures = excluded.consecutive_failures,
+                average_fetch_ms = COALESCE(excluded.average_fetch_ms, feed_status.average_fetch_ms)
+            """,
+            (feed_url, status_code, error[:500], failures, average_fetch_ms),
+        )
+
+
+def list_feed_statuses() -> dict[str, dict]:
+    """Return all recorded feed health and cache statuses keyed by URL."""
+    with get_db().get_cursor() as cursor:
+        cursor.execute("SELECT * FROM feed_status")
+        return {row["feed_url"]: dict(row) for row in cursor.fetchall()}
 
 
 def record_interaction(

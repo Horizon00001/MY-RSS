@@ -48,6 +48,27 @@ class TestFetcherSession:
         asyncio.run(_close())
 
 
+class TestFetcherConditionalHeaders:
+    def test_conditional_headers_include_cached_values(self, monkeypatch):
+        monkeypatch.setattr(
+            "src.fetcher.get_feed_status",
+            lambda url: {
+                "etag": '"abc"',
+                "last_modified": "Wed, 01 May 2026 10:00:00 GMT",
+            },
+        )
+
+        headers = Fetcher._conditional_headers("https://example.com/rss")
+
+        assert headers["If-None-Match"] == '"abc"'
+        assert headers["If-Modified-Since"] == "Wed, 01 May 2026 10:00:00 GMT"
+
+    def test_conditional_headers_empty_without_status(self, monkeypatch):
+        monkeypatch.setattr("src.fetcher.get_feed_status", lambda url: None)
+
+        assert Fetcher._conditional_headers("https://example.com/rss") == {}
+
+
 class TestFetcherAsyncContextManager:
     def test_async_context_manager_closes_session(self):
         async def _run():
