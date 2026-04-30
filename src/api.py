@@ -26,8 +26,10 @@ from .summarizer import Summarizer
 from .database import (
     store_article,
     get_db,
+    get_article_by_link,
     batch_update_summaries,
     list_recent_articles,
+    list_articles_missing_summary,
     list_feed_statuses,
     search_articles,
     get_feed_stats,
@@ -269,6 +271,7 @@ def save_entry_to_db(entry: dict, feed_parser: FeedParser):
             article_id=article_id,
             title=entry.get("title", ""),
             link=entry.get("link", ""),
+            normalized_link=normalize_article_link(entry.get("link", "")),
             summary=entry_text(entry.get("summary", "")),
             content=entry_text(entry.get("content", "")),
             source=entry.get("source", ""),
@@ -412,6 +415,61 @@ async def get_rss_entries(
     )
 
 
+async def summarize_missing_articles(limit: int = 5) -> int:
+    """Summarize stored articles that do not have AI summaries yet."""
+    summarizer = get_summarizer()
+    if not summarizer:
+        return 0
+    articles = list_articles_missing_summary(limit=limit)
+    if not articles:
+        return 0
+    entries = [
+        {
+            "link": article.get("link", ""),
+            "summary": article.get("summary", ""),
+            "content": article.get("content", ""),
+        }
+        for article in articles
+    ]
+    summarized = await summarizer.summarize_batch(entries)
+    await asyncio.to_thread(_update_db_sync, summarized)
+    return len(summarized)
+
+
+@app.post("/rss/refresh", summary="后台刷新RSS")
+async def refresh_rss(background_tasks: BackgroundTasks):
+    """Trigger a non-AI RSS refresh in the background."""
+    background_tasks.add_task(refresh_rss_entries_once)
+    return {"message": "RSS 刷新已开始", "use_ai": False}
+
+
+@app.post("/rss/summarize-missing", summary="后台补齐AI摘要")
+async def summarize_missing(background_tasks: BackgroundTasks, limit: int = Query(default=5, ge=1, le=20)):
+    """Trigger background summarization for stored articles missing AI summaries."""
+    background_tasks.add_task(summarize_missing_articles, limit)
+    return {"message": "AI 摘要补齐已开始", "limit": limit}
+
+
+async def refresh_rss_entries_once() -> int:
+    """Fetch current RSS entries once and save them without AI summarization."""
+    feed_parser = get_feed_parser()
+    fetcher = get_fetcher()
+    cutoff = datetime.now(BEIJING_TZ) - timedelta(days=settings.default_days)
+    seen_links = set()
+    saved = 0
+    async for entry in fetcher.fetch_all(list(settings.rss_feeds.values())):
+        link = entry.get("link", "")
+        norm = normalize_article_link(link)
+        if not link or norm in seen_links:
+            continue
+        seen_links.add(norm)
+        entry_date = feed_parser.get_entry_date(entry)
+        if entry_date and entry_date > cutoff:
+            save_entry_to_db(entry, feed_parser)
+            saved += 1
+    return saved
+
+
 @app.get("/rss/stream", summary="流式获取RSS内容")
 async def stream_rss_entries(
     days: int = Query(default=None, description="过滤最近几天的内容"),
@@ -510,6 +568,15 @@ async def get_local_articles(
     articles = list_recent_articles(limit=limit, offset=offset, days=days)
     entries = [format_db_article(article) for article in articles]
     return RSSResponse(total=len(entries), entries=entries)
+
+
+@app.get("/rss/article", response_model=RSSEntry, summary="获取单篇本地文章")
+async def get_local_article(link: str = Query(default=..., description="文章链接")):
+    """Return one stored article by original or normalized link."""
+    article = get_article_by_link(normalize_article_link(link)) or get_article_by_link(link)
+    if not article:
+        raise HTTPException(status_code=404, detail="文章未找到")
+    return format_db_article(article)
 
 
 @app.get("/rss/state", summary="获取增量更新状态")

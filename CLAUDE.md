@@ -48,6 +48,10 @@ RSS feeds → Fetcher (async) → FeedParser (filter by date) → Summarizer (AI
 | Endpoint | Method | Description |
 |----------|--------|-------------|
 | `/rss/entries` | GET | Get RSS entries with filtering |
+| `/rss/articles` | GET | List locally stored articles without fetching feeds |
+| `/rss/article` | GET | Get one locally stored article by link |
+| `/rss/refresh` | POST | Start a background RSS refresh without AI summarization |
+| `/rss/summarize-missing` | POST | Start background AI summarization for stored articles missing summaries |
 | `/rss/stream` | GET | Stream RSS entries (SSE) |
 | `/rss/feeds` | GET | List configured RSS sources |
 | `/rss/state` | GET | Get incremental fetch state |
@@ -56,9 +60,10 @@ RSS feeds → Fetcher (async) → FeedParser (filter by date) → Summarizer (AI
 
 ## Configuration
 
-**`.env`** - API credentials:
-- `API_KEY` - DeepSeek API key
-- `API_URL` - DeepSeek API endpoint
+**AI summaries** - OpenCode provider:
+- Reads the `xlab` provider from `~/.config/opencode/opencode.json`
+- Default model is `gpt-5.5`
+- Project-local `.env` remains available for app settings, but AI summaries do not depend on project-local API keys
 
 **`config.ini`** - RSS sources:
 - `[rss]` section - feed URLs
@@ -69,8 +74,17 @@ RSS feeds → Fetcher (async) → FeedParser (filter by date) → Summarizer (AI
 
 - **Beijing timezone (UTC+8)** is used for all date filtering and display
 - **Semaphore limit** (default 20) controls concurrent fetches to avoid overwhelming servers
-- **AI summarization** is batched (10 entries/batch) with max 20 concurrent API calls
-- **State file** (`fetch_state.json`) persists last fetch timestamp for incremental updates
+- **AI summarization** is batched and defaults to max 5 concurrent API calls
+- **Homepage performance**: the frontend reads `/rss/articles` from SQLite and does not fetch RSS or call AI on page load
+- **Feed caching**: RSS fetching stores ETag/Last-Modified per feed and uses conditional requests to skip unchanged feeds
+- **State file** (`fetch_state.json`) persists last fetch timestamp for incremental updates and is ignored by Git
+
+## Examples
+
+```bash
+source venv/bin/activate
+python examples/stream_demo.py  # demo xlab gpt-5.5 streaming via httpx
+```
 
 ## Recommendation System
 

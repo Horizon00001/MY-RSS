@@ -34,6 +34,54 @@ class TestSearchArticles:
         finally:
             db_mod._db = old_db
 
+
+class TestArticleLookup:
+    def test_get_article_by_link(self, tmp_path):
+        db = Database(db_path=str(tmp_path / "test.db"))
+        with db.get_cursor() as cursor:
+            cursor.execute(
+                "INSERT INTO articles (id, title, link, normalized_link, published_at) "
+                "VALUES ('a1', 'Title', 'https://example.com/a?utm_source=rss', 'https://example.com/a', datetime('now'))"
+            )
+        import src.database as db_mod
+        old_db = db_mod._db
+        db_mod._db = db
+        try:
+            from src.database import get_article_by_link
+            article = get_article_by_link("https://example.com/a")
+            assert article["id"] == "a1"
+        finally:
+            db_mod._db = old_db
+
+    def test_store_article_dedupes_by_normalized_link(self, tmp_path):
+        db = Database(db_path=str(tmp_path / "test.db"))
+        import src.database as db_mod
+        old_db = db_mod._db
+        db_mod._db = db
+        try:
+            from src.database import get_article_by_link, store_article
+
+            inserted = store_article(
+                article_id="a1",
+                title="Original",
+                link="https://example.com/a?utm_source=rss",
+                normalized_link="https://example.com/a",
+            )
+            updated = store_article(
+                article_id="a2",
+                title="Updated",
+                link="https://example.com/a#comments",
+                normalized_link="https://example.com/a",
+            )
+
+            article = get_article_by_link("https://example.com/a")
+            assert inserted is True
+            assert updated is False
+            assert article["id"] == "a1"
+            assert article["title"] == "Updated"
+        finally:
+            db_mod._db = old_db
+
     def test_search_no_match(self, tmp_path):
         db = Database(db_path=str(tmp_path / "test.db"))
         import src.database as db_mod
@@ -119,6 +167,22 @@ class TestArticleHasSummary:
         try:
             from src.database import article_has_summary
             assert article_has_summary("a1") is True
+        finally:
+            db_mod._db = old_db
+
+    def test_get_article_summary_returns_cached_value(self, tmp_path):
+        db = Database(db_path=str(tmp_path / "test.db"))
+        with db.get_cursor() as cursor:
+            cursor.execute(
+                "INSERT INTO articles (id, title, link, published_at, ai_summary) "
+                "VALUES ('a1', 'T', 'https://x.com', datetime('now'), 'Cached summary')"
+            )
+        import src.database as db_mod
+        old_db = db_mod._db
+        db_mod._db = db
+        try:
+            from src.database import get_article_summary
+            assert get_article_summary("a1") == "Cached summary"
         finally:
             db_mod._db = old_db
 

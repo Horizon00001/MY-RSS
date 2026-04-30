@@ -58,6 +58,7 @@ class Database:
                     id TEXT PRIMARY KEY,
                     title TEXT NOT NULL,
                     link TEXT UNIQUE NOT NULL,
+                    normalized_link TEXT UNIQUE,
                     summary TEXT,
                     content TEXT,
                     source TEXT,
@@ -72,6 +73,10 @@ class Database:
             # Add ai_summary column if it doesn't exist (for existing databases)
             try:
                 cursor.execute("ALTER TABLE articles ADD COLUMN ai_summary TEXT")
+            except Exception:
+                pass
+            try:
+                cursor.execute("ALTER TABLE articles ADD COLUMN normalized_link TEXT")
             except Exception:
                 pass
 
@@ -108,6 +113,11 @@ class Database:
                 ON articles(published_at DESC)
             """)
             cursor.execute("""
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_articles_normalized_link
+                ON articles(normalized_link)
+                WHERE normalized_link IS NOT NULL AND normalized_link != ''
+            """)
+            cursor.execute("""
                 CREATE INDEX IF NOT EXISTS idx_user_interactions_user_id
                 ON user_interactions(user_id, created_at DESC)
             """)
@@ -141,6 +151,7 @@ def store_article(
     published_at: Optional[datetime] = None,
     tags: list[str] = None,
     ai_summary: str = "",
+    normalized_link: str = "",
 ) -> bool:
     """Store or update an article."""
     with get_db().get_cursor() as cursor:
@@ -148,26 +159,29 @@ def store_article(
         try:
             cursor.execute(
                 """
-                INSERT INTO articles (id, title, link, summary, content, source, source_name, published_at, tags, ai_summary)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO articles (id, title, link, normalized_link, summary, content, source, source_name, published_at, tags, ai_summary)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
-                (article_id, title, link, summary, content, source, source_name, published_at, tags_json, ai_summary),
+                (article_id, title, link, normalized_link, summary, content, source, source_name, published_at, tags_json, ai_summary),
             )
             return True
         except sqlite3.IntegrityError:
+            where_column = "normalized_link" if normalized_link else "link"
+            where_value = normalized_link or link
             cursor.execute(
-                """
+                f"""
                 UPDATE articles SET
                     title = ?,
+                    link = ?,
                     summary = ?,
                     content = ?,
                     source_name = ?,
                     published_at = ?,
                     tags = ?,
                     ai_summary = ?
-                WHERE link = ?
+                WHERE {where_column} = ?
                 """,
-                (title, summary, content, source_name, published_at, tags_json, ai_summary, link),
+                (title, link, summary, content, source_name, published_at, tags_json, ai_summary, where_value),
             )
             return False
 
@@ -180,6 +194,32 @@ def get_article(article_id: str) -> Optional[dict]:
         if row:
             return dict(row)
         return None
+
+
+def get_article_by_link(link: str) -> Optional[dict]:
+    """Get an article by original or normalized link."""
+    with get_db().get_cursor() as cursor:
+        cursor.execute(
+            "SELECT * FROM articles WHERE link = ? OR normalized_link = ?",
+            (link, link),
+        )
+        row = cursor.fetchone()
+        return dict(row) if row else None
+
+
+def list_articles_missing_summary(limit: int = 20) -> list[dict]:
+    """List stored articles that do not have an AI summary yet."""
+    with get_db().get_cursor() as cursor:
+        cursor.execute(
+            """
+            SELECT * FROM articles
+            WHERE ai_summary IS NULL OR ai_summary = ''
+            ORDER BY published_at DESC
+            LIMIT ?
+            """,
+            (limit,),
+        )
+        return [dict(row) for row in cursor.fetchall()]
 
 
 def get_recent_articles(limit: int = 100, days: int = 7) -> list[dict]:
@@ -357,6 +397,17 @@ def article_has_summary(article_id: str) -> bool:
             (article_id,),
         )
         return cursor.fetchone() is not None
+
+
+def get_article_summary(article_id: str) -> str:
+    """Return cached AI summary for an article, or an empty string."""
+    with get_db().get_cursor() as cursor:
+        cursor.execute(
+            "SELECT ai_summary FROM articles WHERE id = ? AND ai_summary IS NOT NULL AND ai_summary != ''",
+            (article_id,),
+        )
+        row = cursor.fetchone()
+        return row["ai_summary"] if row else ""
 
 
 def update_article_summary(article_id: str, ai_summary: str) -> None:

@@ -50,6 +50,22 @@ class TestRSSFeeds:
         assert feed["average_fetch_ms"] == 12.3
 
 
+class TestRefreshEndpoints:
+    def test_refresh_endpoint_starts_background_task(self, client):
+        with patch("src.api.refresh_rss_entries_once", return_value=0):
+            response = client.post("/rss/refresh")
+
+        assert response.status_code == 200
+        assert "刷新已开始" in response.json()["message"]
+
+    def test_summarize_missing_endpoint_starts_background_task(self, client):
+        with patch("src.api.summarize_missing_articles", return_value=0):
+            response = client.post("/rss/summarize-missing?limit=3")
+
+        assert response.status_code == 200
+        assert response.json()["limit"] == 3
+
+
 class TestLocalArticles:
     def test_get_local_articles(self, client):
         """Test /rss/articles reads from local database only."""
@@ -59,6 +75,20 @@ class TestLocalArticles:
             data = response.json()
             assert data["total"] == 0
             assert data["entries"] == []
+
+    def test_get_local_article_by_link(self, client):
+        with patch("src.api.get_article_by_link", return_value={
+            "title": "Test Article",
+            "link": "https://example.com/a",
+            "summary": "Summary",
+            "content": "Content",
+            "ai_summary": "AI summary",
+            "published_at": "2026-05-01 10:00:00",
+        }):
+            response = client.get("/rss/article?link=https%3A%2F%2Fexample.com%2Fa")
+
+        assert response.status_code == 200
+        assert response.json()["title"] == "Test Article"
 
 
 class TestNormalizeArticleLink:

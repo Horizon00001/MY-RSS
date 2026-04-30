@@ -1,4 +1,4 @@
-"""Temporary demo for streaming xlab responses with httpx."""
+"""Demo for streaming xlab responses with httpx."""
 
 import json
 import time
@@ -30,7 +30,6 @@ def main() -> None:
 
 
 def stream_response(base_url: str, api_key: str, prompt: str) -> None:
-
     with httpx.stream(
         "POST",
         f"{base_url}/chat/completions",
@@ -42,7 +41,6 @@ def stream_response(base_url: str, api_key: str, prompt: str) -> None:
             "model": "gpt-5.5",
             "messages": [{"role": "user", "content": prompt}],
             "stream": True,
-            "max_completion_tokens": 300,
         },
         timeout=60,
     ) as response:

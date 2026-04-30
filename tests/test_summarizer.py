@@ -1,6 +1,7 @@
 """Tests for src/summarizer.py."""
 
 import pytest
+import asyncio
 
 from src.summarizer import SUMMARIZE_PROMPT, Summarizer
 
@@ -38,6 +39,18 @@ class TestSummarize:
         )
         result = summarizer.summarize("   ")
         assert result == ""
+
+    def test_cached_summary_is_filled_without_api_call(self, monkeypatch):
+        summarizer = Summarizer(
+            api_key="sk-test",
+            api_url="https://api.test.com/v1",
+        )
+        monkeypatch.setattr("src.summarizer.get_article_summary", lambda article_id: "Cached summary")
+        monkeypatch.setattr(summarizer, "summarize", lambda text: pytest.fail("API should not be called"))
+
+        entries = asyncio.run(summarizer.summarize_batch([{"link": "https://example.com/a"}]))
+
+        assert entries[0]["ai_summary"] == "Cached summary"
 
 
 class TestInit:

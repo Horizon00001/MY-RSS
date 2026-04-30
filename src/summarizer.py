@@ -9,6 +9,8 @@ from typing import Optional
 
 import httpx
 
+from .database import get_article_summary
+
 logger = logging.getLogger(__name__)
 
 SUMMARIZE_PROMPT = """你是一个新闻摘要助手。请用50-150字总结以下内容，提取关键信息。直接输出摘要，不要其他解释：
@@ -56,11 +58,6 @@ class Summarizer:
         link = entry.get("link", "")
         return hashlib.md5(link.encode()).hexdigest()[:12]
 
-    @staticmethod
-    def _has_cached_summary(article_id: str) -> bool:
-        from .database import article_has_summary
-        return article_has_summary(article_id)
-
     def summarize(self, text: str, max_retries: int = 3) -> str:
         """Synchronous summarization with retry."""
         if not text or not text.strip():
@@ -98,8 +95,9 @@ class Summarizer:
         """Summarize a single entry with semaphore control and cache check."""
         article_id = self._compute_article_id(entry)
 
-        # Skip if already cached in DB
-        if self._has_cached_summary(article_id):
+        cached_summary = get_article_summary(article_id)
+        if cached_summary:
+            entry["ai_summary"] = cached_summary
             return entry
 
         async with self._semaphore:
@@ -115,7 +113,9 @@ class Summarizer:
         to_summarize = []
         for entry in entries:
             article_id = self._compute_article_id(entry)
-            if self._has_cached_summary(article_id):
+            cached_summary = get_article_summary(article_id)
+            if cached_summary:
+                entry["ai_summary"] = cached_summary
                 logger.debug("Skipping cached summary for %s", entry.get("link"))
             else:
                 to_summarize.append(entry)

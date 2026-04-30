@@ -1,6 +1,6 @@
 /* MY-RSS Frontend Application */
 
-const API = "http://localhost:8000";
+const API = window.location.origin;
 
 // ─── Router ───────────────────────────────────────────
 function route() {
@@ -86,6 +86,25 @@ async function showHome(params) {
     )
   );
 
+  if (!q) {
+    app.append(el("div", { className: "feed-actions" },
+      el("button", { className: "btn", onclick: async () => {
+        try {
+          const res = await fetch(`${API}/rss/refresh`, { method: "POST" });
+          const data = await res.json();
+          toast(data.message || "RSS 刷新已开始", res.ok ? "success" : "error");
+        } catch (err) { toast("刷新失败: " + err.message, "error"); }
+      }}, "刷新 RSS"),
+      el("button", { className: "btn btn-outline", onclick: async () => {
+        try {
+          const res = await fetch(`${API}/rss/summarize-missing`, { method: "POST" });
+          const data = await res.json();
+          toast(data.message || "AI 摘要补齐已开始", res.ok ? "success" : "error");
+        } catch (err) { toast("摘要任务启动失败: " + err.message, "error"); }
+      }}, "补 AI 摘要")
+    ));
+  }
+
   if (entries.length === 0) {
     app.append(el("div", { className: "empty" },
       el("h3", {}, q ? `没有找到 "${q}" 相关文章` : "暂无文章"),
@@ -132,11 +151,10 @@ async function showArticle(link) {
   app.innerHTML = `<div class="loading">加载中...</div>`;
 
   try {
-    const res = await fetch(`${API}/rss/articles?limit=500&days=30`);
-    const data = await res.json();
-    const entry = (data.entries || []).find(e => e.link === url);
+    const res = await fetch(`${API}/rss/article?link=${encodeURIComponent(url)}`);
+    const entry = await res.json();
 
-    if (!entry) {
+    if (!res.ok) {
       app.innerHTML = `<div class="empty"><h3>文章未找到</h3><p><a href="#/">返回列表</a></p></div>`;
       return;
     }
