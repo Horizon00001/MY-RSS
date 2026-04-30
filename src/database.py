@@ -183,6 +183,21 @@ def get_recent_articles(limit: int = 100, days: int = 7) -> list[dict]:
         return [dict(row) for row in cursor.fetchall()]
 
 
+def list_recent_articles(limit: int = 20, offset: int = 0, days: int = 30) -> list[dict]:
+    """List recent articles from the local database without fetching feeds."""
+    with get_db().get_cursor() as cursor:
+        cursor.execute(
+            """
+            SELECT * FROM articles
+            WHERE published_at > datetime('now', '-' || ? || ' days')
+            ORDER BY published_at DESC
+            LIMIT ? OFFSET ?
+            """,
+            (days, limit, offset),
+        )
+        return [dict(row) for row in cursor.fetchall()]
+
+
 def record_interaction(
     user_id: str,
     article_id: str,

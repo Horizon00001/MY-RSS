@@ -2,11 +2,12 @@
 
 import asyncio
 import hashlib
+import json
 import logging
-import os
+from pathlib import Path
 from typing import Optional
 
-import anthropic
+import httpx
 
 logger = logging.getLogger(__name__)
 
@@ -19,25 +20,36 @@ SUMMARIZE_PROMPT = """你是一个新闻摘要助手。请用50-150字总结以�
 class Summarizer:
     """AI-powered content summarizer using Anthropic-compatible API."""
 
+    OPENCODE_CONFIG = Path.home() / ".config" / "opencode" / "opencode.json"
+    DEFAULT_PROVIDER = "xlab"
+    DEFAULT_MODEL = "gpt-5.5"
+
+    @classmethod
+    def _load_opencode_provider(cls) -> dict:
+        if not cls.OPENCODE_CONFIG.exists():
+            return {}
+        with cls.OPENCODE_CONFIG.open(encoding="utf-8") as f:
+            config = json.load(f)
+        provider = config.get("provider", {}).get(cls.DEFAULT_PROVIDER, {})
+        return provider.get("options", {})
+
     def __init__(
         self,
         api_key: Optional[str] = None,
         api_url: Optional[str] = None,
-        model: str = "deepseek/deepseek-v4-pro-free",
-        max_concurrent: int = 20,
+        model: Optional[str] = None,
+        max_concurrent: int = 5,
     ):
-        self.api_key = api_key or os.getenv("API_KEY", "")
-        self.api_url = api_url or os.getenv("API_URL", "https://zenmux.ai/api/anthropic")
-        self.model = model or os.getenv("MODEL", "deepseek/deepseek-v4-pro-free")
+        opencode_options = self._load_opencode_provider()
+        self.api_key = api_key or opencode_options.get("apiKey", "")
+        self.api_url = api_url or opencode_options.get("baseURL", "")
+        self.model = model or self.DEFAULT_MODEL
         self._semaphore = asyncio.Semaphore(max_concurrent)
 
         if not self.api_key or self.api_key == "your_api_key_here":
             raise ValueError("API_KEY not configured")
 
-        self.client = anthropic.Anthropic(
-            api_key=self.api_key,
-            base_url=self.api_url,
-        )
+        self.endpoint = self.api_url.rstrip("/") + "/chat/completions"
 
     @staticmethod
     def _compute_article_id(entry: dict) -> str:
@@ -58,12 +70,21 @@ class Summarizer:
 
         for attempt in range(max_retries):
             try:
-                response = self.client.messages.create(
-                    model=self.model,
-                    max_tokens=200,
-                    messages=[{"role": "user", "content": prompt}],
+                response = httpx.post(
+                    self.endpoint,
+                    headers={
+                        "Authorization": f"Bearer {self.api_key}",
+                        "Content-Type": "application/json",
+                    },
+                    json={
+                        "model": self.model,
+                        "messages": [{"role": "user", "content": prompt}],
+                        "max_completion_tokens": 200,
+                    },
+                    timeout=60,
                 )
-                result = response.content[0].text or ""
+                response.raise_for_status()
+                result = response.json()["choices"][0]["message"]["content"] or ""
                 return result
             except Exception as e:
                 logger.warning("AI summarize attempt %d failed: %s", attempt + 1, e)
@@ -83,7 +104,7 @@ class Summarizer:
             return entry
 
         async with self._semaphore:
-            content = entry.get("content") or entry.get("summary") or ""
+            content = _entry_text(entry.get("content")) or _entry_text(entry.get("summary"))
             entry["ai_summary"] = await asyncio.to_thread(self.summarize, content)
             return entry
 
@@ -107,3 +128,16 @@ class Summarizer:
             await asyncio.gather(*tasks)
 
         return entries
+
+
+def _entry_text(value) -> str:
+    """Convert feedparser string/list/dict fields into text for summarization."""
+    if not value:
+        return ""
+    if isinstance(value, str):
+        return value
+    if isinstance(value, dict):
+        return str(value.get("value") or value.get("content") or "")
+    if isinstance(value, list):
+        return "\n".join(_entry_text(item) for item in value if item)
+    return str(value)

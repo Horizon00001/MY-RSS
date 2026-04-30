@@ -4,12 +4,13 @@ import pytest
 from unittest.mock import patch, MagicMock, AsyncMock
 from fastapi.testclient import TestClient
 
-from src.api import app
+from src.api import app, normalize_article_link
 
 
 @pytest.fixture
 def client():
-    return TestClient(app)
+    with TestClient(app) as test_client:
+        yield test_client
 
 
 class TestRoot:
@@ -25,6 +26,29 @@ class TestRSSFeeds:
         assert response.status_code == 200
         assert "feeds" in response.json()
         assert isinstance(response.json()["feeds"], list)
+
+
+class TestLocalArticles:
+    def test_get_local_articles(self, client):
+        """Test /rss/articles reads from local database only."""
+        with patch("src.api.list_recent_articles", return_value=[]):
+            response = client.get("/rss/articles")
+            assert response.status_code == 200
+            data = response.json()
+            assert data["total"] == 0
+            assert data["entries"] == []
+
+
+class TestNormalizeArticleLink:
+    def test_removes_tracking_params_and_fragment(self):
+        link = "https://example.com/news/123/?utm_source=rss&utm_campaign=test&keep=1#comments"
+
+        assert normalize_article_link(link) == "https://example.com/news/123?keep=1"
+
+    def test_normalizes_scheme_host_and_trailing_slash(self):
+        link = "HTTP://EXAMPLE.com/news/123/"
+
+        assert normalize_article_link(link) == "https://example.com/news/123"
 
 
 class TestRSSEntries:

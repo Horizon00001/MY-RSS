@@ -65,7 +65,7 @@ async function showHome(params) {
     const res = await fetch(`${API}/rss/search?q=${encodeURIComponent(q)}&limit=${limit}&offset=${offset}`);
     data = await res.json();
   } else {
-    const res = await fetch(`${API}/rss/entries?use_ai=true&limit=${limit}&offset=${offset}`);
+    const res = await fetch(`${API}/rss/articles?limit=${limit}&offset=${offset}`);
     data = await res.json();
   }
 
@@ -89,7 +89,7 @@ async function showHome(params) {
   if (entries.length === 0) {
     app.append(el("div", { className: "empty" },
       el("h3", {}, q ? `没有找到 "${q}" 相关文章` : "暂无文章"),
-      el("p", {}, q ? "试试其他关键词" : "点击右上角触发抓取")
+      el("p", {}, q ? "试试其他关键词" : "暂无本地文章，请先触发 RSS 抓取")
     ));
     return;
   }
@@ -132,7 +132,7 @@ async function showArticle(link) {
   app.innerHTML = `<div class="loading">加载中...</div>`;
 
   try {
-    const res = await fetch(`${API}/rss/entries?use_ai=true&limit=500&days=30`);
+    const res = await fetch(`${API}/rss/articles?limit=500&days=30`);
     const data = await res.json();
     const entry = (data.entries || []).find(e => e.link === url);
 

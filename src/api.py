@@ -9,6 +9,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Optional, Set
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 from xml.etree import ElementTree as ET
 
 from fastapi import BackgroundTasks, Depends, FastAPI, File, HTTPException, Query, UploadFile, WebSocket, WebSocketDisconnect
@@ -26,6 +27,7 @@ from .database import (
     store_article,
     get_db,
     batch_update_summaries,
+    list_recent_articles,
     search_articles,
     get_feed_stats,
 )
@@ -35,6 +37,35 @@ from .recommender.api import router as recommender_router
 logger = logging.getLogger(__name__)
 
 BEIJING_TZ = timezone(timedelta(hours=8))
+TRACKING_QUERY_PREFIXES = ("utm_",)
+TRACKING_QUERY_KEYS = {
+    "fbclid",
+    "gclid",
+    "igshid",
+    "mc_cid",
+    "mc_eid",
+}
+
+
+def normalize_article_link(link: str) -> str:
+    """Normalize article URLs so tracking variants deduplicate correctly."""
+    if not link:
+        return ""
+
+    parsed = urlsplit(link.strip())
+    scheme = "https" if parsed.scheme in {"http", "https"} else parsed.scheme.lower()
+    netloc = parsed.netloc.lower()
+    path = parsed.path.rstrip("/") or parsed.path
+    query = urlencode(
+        [
+            (key, value)
+            for key, value in parse_qsl(parsed.query, keep_blank_values=True)
+            if not key.lower().startswith(TRACKING_QUERY_PREFIXES)
+            and key.lower() not in TRACKING_QUERY_KEYS
+        ],
+        doseq=True,
+    )
+    return urlunsplit((scheme, netloc, path, query, ""))
 
 
 # Factory functions for dependency injection
@@ -184,10 +215,41 @@ def format_entry(entry: dict, feed_parser: FeedParser) -> RSSEntry:
     return RSSEntry(
         title=entry.get("title", ""),
         link=entry.get("link", ""),
-        summary=entry.get("summary", ""),
+        summary=entry_text(entry.get("summary", "")),
         date=entry_date.strftime("%Y-%m-%d %H:%M:%S (北京时间)") if entry_date else None,
-        content=entry.get("content", ""),
+        content=entry_text(entry.get("content", "")),
         ai_summary=entry.get("ai_summary", ""),
+    )
+
+
+def entry_text(value) -> str:
+    """Convert feedparser string/list/dict fields into plain text."""
+    if not value:
+        return ""
+    if isinstance(value, str):
+        return value
+    if isinstance(value, dict):
+        return str(value.get("value") or value.get("content") or "")
+    if isinstance(value, list):
+        return "\n".join(entry_text(item) for item in value if item)
+    return str(value)
+
+
+def format_db_article(article: dict) -> RSSEntry:
+    """Convert a database article row to the public RSS entry shape."""
+    published_at = article.get("published_at")
+    if isinstance(published_at, datetime):
+        date = published_at.strftime("%Y-%m-%d %H:%M:%S (北京时间)")
+    else:
+        date = str(published_at) if published_at else None
+
+    return RSSEntry(
+        title=article.get("title", ""),
+        link=article.get("link", ""),
+        summary=article.get("summary", ""),
+        date=date,
+        content=article.get("content", ""),
+        ai_summary=article.get("ai_summary", ""),
     )
 
 
@@ -206,8 +268,8 @@ def save_entry_to_db(entry: dict, feed_parser: FeedParser):
             article_id=article_id,
             title=entry.get("title", ""),
             link=entry.get("link", ""),
-            summary=entry.get("summary", ""),
-            content=entry.get("content", ""),
+            summary=entry_text(entry.get("summary", "")),
+            content=entry_text(entry.get("content", "")),
             source=entry.get("source", ""),
             source_name=entry.get("feed_title", ""),
             published_at=entry_date,
@@ -243,7 +305,7 @@ async def get_rss_entries(
     limit: int = Query(default=None, description="返回条目数量限制"),
     offset: int = Query(default=0, description="跳过的条目数"),
     incremental: bool = Query(default=False, description="是否启用增量更新"),
-    use_ai: bool = Query(default=True, description="是否启用AI总结"),
+    use_ai: bool = Query(default=False, description="是否启用AI总结"),
     state_manager: StateManager = Depends(get_state_manager),
     feed_parser: FeedParser = Depends(get_feed_parser),
     fetcher: Fetcher = Depends(get_fetcher),
@@ -265,13 +327,10 @@ async def get_rss_entries(
     seen_links: set = set()
     summarizer_done = asyncio.Event()
 
-    def _normalize_link(link: str) -> str:
-        return link.strip().rstrip("/").lower()
-
     async def fetcher_worker():
         async for entry in fetcher.fetch_all(urls):
             link = entry.get("link", "")
-            norm = _normalize_link(link)
+            norm = normalize_article_link(link)
             if not link or norm in seen_links:
                 continue
             seen_links.add(norm)
@@ -317,6 +376,11 @@ async def get_rss_entries(
     else:
         try:
             async for entry in fetcher.fetch_all(urls):
+                link = entry.get("link", "")
+                norm = normalize_article_link(link)
+                if not link or norm in seen_links:
+                    continue
+                seen_links.add(norm)
                 entry_date = feed_parser.get_entry_date(entry)
                 if last_fetch:
                     if entry_date and entry_date > last_fetch:
@@ -433,6 +497,18 @@ async def stream_rss_entries(
 @app.get("/rss/feeds", summary="获取配置的RSS源列表")
 async def get_rss_feeds():
     return {"feeds": list(settings.rss_feeds.values())}
+
+
+@app.get("/rss/articles", response_model=RSSResponse, summary="获取本地文章")
+async def get_local_articles(
+    days: int = Query(default=30, ge=1, le=365, description="读取最近几天的本地文章"),
+    limit: int = Query(default=20, ge=1, le=100, description="返回条目数量限制"),
+    offset: int = Query(default=0, ge=0, description="跳过的条目数"),
+):
+    """Return articles already stored in SQLite without fetching RSS or calling AI."""
+    articles = list_recent_articles(limit=limit, offset=offset, days=days)
+    entries = [format_db_article(article) for article in articles]
+    return RSSResponse(total=len(entries), entries=entries)
 
 
 @app.get("/rss/state", summary="获取增量更新状态")
