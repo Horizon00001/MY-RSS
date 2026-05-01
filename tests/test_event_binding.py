@@ -7,6 +7,7 @@ Otherwise, the handler tries to bind to a non-existent app object.
 import pytest
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
+from fastapi.testclient import TestClient
 
 
 class TestEventBindingOrder:
@@ -74,9 +75,9 @@ class TestEventBindingOrder:
 
         app = FastAPI(lifespan=lifespan)
 
-        # State is set during lifespan setup
-        assert app.state.initialized is True
-        assert app.state.startup_time == "2024-01-01"
+        with TestClient(app):
+            assert app.state.initialized is True
+            assert app.state.startup_time == "2024-01-01"
 
     def test_startup_can_initialize_resources(self):
         """Demonstrate startup for resource initialization."""
@@ -91,15 +92,10 @@ class TestEventBindingOrder:
 
         app = FastAPI(lifespan=lifespan)
 
-        # Resources available after app creation
-        assert connections == ["db_connection", "cache_connection"]
+        with TestClient(app):
+            assert connections == ["db_connection", "cache_connection"]
 
-        # Simulate shutdown by running lifespan again
-        import asyncio
-        async def simulate_shutdown():
-            pass  # In real app, lifespan runs during server start/stop
-
-        asyncio.run(simulate_shutdown())
+        assert connections == []
 
 
 class TestInPractice:

@@ -1,0 +1,18 @@
+{
+  "sources": [
+    {
+      "id": "example-tech",
+      "name": "Example Tech Feed",
+      "url": "https://example.com/feed.xml",
+      "category": "tech",
+      "enabled": true
+    }
+  ],
+  "filter": {
+    "days": 2,
+    "enabled": true
+  },
+  "headers": {
+    "user_agent": "Mozilla/5.0 (compatible; MY-RSS Bot/1.0)"
+  }
+}

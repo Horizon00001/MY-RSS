@@ -36,3 +36,7 @@ htmlcov/
 # OS
 .DS_Store
 Thumbs.db
+
+# Local config
+config/sources.json
+test_history.json

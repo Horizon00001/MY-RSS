@@ -4,13 +4,15 @@ import pytest
 from unittest.mock import patch, MagicMock, AsyncMock
 from fastapi.testclient import TestClient
 
-from src.api import app, normalize_article_link
+from src.api import app, get_feed_parser, get_fetcher, get_state_manager, get_summarizer, normalize_article_link
 
 
 @pytest.fixture
 def client():
+    app.dependency_overrides.clear()
     with TestClient(app) as test_client:
         yield test_client
+    app.dependency_overrides.clear()
 
 
 class TestRoot:
@@ -122,14 +124,16 @@ class TestRSSEntries:
         mock_fetcher_instance = MagicMock()
         mock_fetcher_instance.fetch_all = mock_fetch_all
 
-        with patch("src.api.get_fetcher", return_value=mock_fetcher_instance):
-            with patch("src.api.get_feed_parser", return_value=mock_feed_parser):
-                with patch("src.api.get_state_manager", return_value=mock_state_manager):
-                    response = client.get("/rss/entries?use_ai=false")
-                    assert response.status_code == 200
-                    data = response.json()
-                    assert "entries" in data
-                    assert "total" in data
+        app.dependency_overrides[get_fetcher] = lambda: mock_fetcher_instance
+        app.dependency_overrides[get_feed_parser] = lambda: mock_feed_parser
+        app.dependency_overrides[get_state_manager] = lambda: mock_state_manager
+
+        response = client.get("/rss/entries?use_ai=false")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert "entries" in data
+        assert "total" in data
 
     def test_get_entries_with_limit(self, client, mock_fetcher, mock_feed_parser, mock_state_manager):
         """Test /rss/entries with limit parameter."""
@@ -154,13 +158,15 @@ class TestRSSEntries:
         mock_fetcher_instance = MagicMock()
         mock_fetcher_instance.fetch_all = mock_fetch_all
 
-        with patch("src.api.get_fetcher", return_value=mock_fetcher_instance):
-            with patch("src.api.get_feed_parser", return_value=mock_feed_parser):
-                with patch("src.api.get_state_manager", return_value=mock_state_manager):
-                    response = client.get("/rss/entries?limit=2&use_ai=false")
-                    assert response.status_code == 200
-                    data = response.json()
-                    assert data["total"] <= 2
+        app.dependency_overrides[get_fetcher] = lambda: mock_fetcher_instance
+        app.dependency_overrides[get_feed_parser] = lambda: mock_feed_parser
+        app.dependency_overrides[get_state_manager] = lambda: mock_state_manager
+
+        response = client.get("/rss/entries?limit=2&use_ai=false")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["total"] <= 2
 
     def test_get_entries_error_handling(self, client):
         """Test error handling when fetching fails - returns empty results gracefully."""
@@ -176,36 +182,44 @@ class TestRSSEntries:
         mock_feed_parser_instance = MagicMock()
         mock_state_manager_instance = MagicMock()
 
-        with patch("src.api.get_fetcher", return_value=mock_fetcher_instance):
-            with patch("src.api.get_feed_parser", return_value=mock_feed_parser_instance):
-                with patch("src.api.get_state_manager", return_value=mock_state_manager_instance):
-                    response = client.get("/rss/entries?use_ai=false")
-                    assert response.status_code == 200
-                    data = response.json()
-                    assert data["total"] == 0
-                    assert data["entries"] == []
+        app.dependency_overrides[get_fetcher] = lambda: mock_fetcher_instance
+        app.dependency_overrides[get_feed_parser] = lambda: mock_feed_parser_instance
+        app.dependency_overrides[get_state_manager] = lambda: mock_state_manager_instance
+
+        response = client.get("/rss/entries?use_ai=false")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["total"] == 0
+        assert data["entries"] == []
 
 
 class TestRSSState:
     def test_get_state(self, client, mock_state_manager):
         """Test /rss/state endpoint."""
-        with patch("src.api.get_state_manager", return_value=mock_state_manager):
-            response = client.get("/rss/state")
-            assert response.status_code == 200
-            assert "last_fetch" in response.json()
-            assert "state_file" in response.json()
+        app.dependency_overrides[get_state_manager] = lambda: mock_state_manager
+
+        response = client.get("/rss/state")
+
+        assert response.status_code == 200
+        assert "last_fetch" in response.json()
+        assert "state_file" in response.json()
 
     def test_reset_state(self, client, mock_state_manager):
         """Test /rss/state/reset endpoint."""
-        with patch("src.api.get_state_manager", return_value=mock_state_manager):
-            response = client.post("/rss/state/reset")
-            assert response.status_code == 200
-            mock_state_manager.reset.assert_called_once()
+        app.dependency_overrides[get_state_manager] = lambda: mock_state_manager
+
+        response = client.post("/rss/state/reset")
+
+        assert response.status_code == 200
+        mock_state_manager.reset.assert_called_once()
 
 
 class TestRSSStream:
     def test_stream_requires_ai(self, client):
         """Test that streaming requires AI summarizer."""
-        with patch("src.api.get_summarizer", return_value=None):
-            response = client.get("/rss/stream?use_ai=true")
-            assert response.status_code == 400
+        app.dependency_overrides[get_summarizer] = lambda: None
+
+        response = client.get("/rss/stream?use_ai=true")
+
+        assert response.status_code == 400
