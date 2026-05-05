@@ -1,314 +1,387 @@
-/* MY-RSS Frontend Application */
-
 const API = window.location.origin;
+const state = {
+  route: "/",
+  query: "",
+  page: 1,
+  limit: 18,
+  entries: [],
+  selected: null,
+  feeds: [],
+  health: null,
+};
 
-// ─── Router ───────────────────────────────────────────
-function route() {
-  const hash = location.hash.slice(1) || "/";
-  document.querySelectorAll(".nav-link").forEach(a => {
-    const r = a.dataset.route;
-    a.classList.toggle("active", hash === r || (r !== "/" && hash.startsWith(r)));
+function $(id) {
+  return document.getElementById(id);
+}
+
+function escapeHtml(text) {
+  return String(text || "")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#39;");
+}
+
+function toast(message, type = "info") {
+  const host = $("toastHost");
+  if (!host) return;
+  const node = document.createElement("div");
+  node.className = `toast ${type}`;
+  node.textContent = message;
+  host.appendChild(node);
+  setTimeout(() => {
+    node.style.opacity = "0";
+    node.style.transform = "translateY(6px)";
+    setTimeout(() => node.remove(), 180);
+  }, 2200);
+}
+
+function formatDate(input) {
+  if (!input) return "未知时间";
+  return String(input).replace(" (北京时间)", "");
+}
+
+function parseRoute() {
+  const raw = location.hash.slice(1) || "/";
+  const [path, queryString] = raw.split("?");
+  return { path, params: new URLSearchParams(queryString || "") };
+}
+
+function setActiveNav(route) {
+  document.querySelectorAll(".nav-link").forEach((link) => {
+    const target = link.dataset.route;
+    link.classList.toggle("active", route === target || (target !== "/" && route.startsWith(target)));
   });
-
-  if (hash.startsWith("/article/")) {
-    showArticle(hash.split("/article/")[1]);
-  } else if (hash === "/feeds") {
-    showFeeds();
-  } else if (hash === "/health") {
-    showHealth();
-  } else {
-    showHome(new URLSearchParams());
-  }
 }
 
-window.addEventListener("hashchange", route);
-window.addEventListener("load", route);
-
-// ─── Toast ────────────────────────────────────────────
-function toast(msg, type = "") {
-  const t = document.createElement("div");
-  t.className = "toast " + type;
-  t.textContent = msg;
-  document.body.appendChild(t);
-  setTimeout(() => t.remove(), 2500);
+function setViewMeta(title, hint) {
+  $("viewTitle").textContent = title;
+  $("viewHint").textContent = hint;
 }
 
-// ─── Render helpers ───────────────────────────────────
-function el(tag, attrs = {}, ...children) {
-  const e = document.createElement(tag);
-  Object.entries(attrs).forEach(([k, v]) => {
-    if (k === "className") e.className = v;
-    else if (k.startsWith("on")) e.addEventListener(k.slice(2), v);
-    else e.setAttribute(k, v);
-  });
-  children.forEach(c => e.append(typeof c === "string" ? document.createTextNode(c) : c));
-  return e;
+function setOverview(metrics) {
+  const el = $("overview");
+  el.innerHTML = `
+    <div class="metric">
+      <div class="metric-label">文章总数</div>
+      <div class="metric-value">${metrics.articles}</div>
+    </div>
+    <div class="metric">
+      <div class="metric-label">RSS 源</div>
+      <div class="metric-value">${metrics.feeds}</div>
+    </div>
+    <div class="metric">
+      <div class="metric-label">健康源</div>
+      <div class="metric-value">${metrics.active}</div>
+    </div>
+    <div class="metric">
+      <div class="metric-label">AI 摘要</div>
+      <div class="metric-value">${metrics.summaries}</div>
+    </div>
+  `;
 }
 
-function formatDate(d) {
-  if (!d) return "";
-  return d.replace(" (北京时间)", "");
-}
-
-// ─── Home: Article List ───────────────────────────────
-async function showHome(params) {
-  const app = document.getElementById("app");
-  const page = parseInt(params.get("page")) || 1;
-  const q = params.get("q") || "";
-  const limit = 20;
-  const offset = (page - 1) * limit;
-
-  app.innerHTML = `<div class="loading">加载中...</div>`;
-
-  let data;
-  if (q) {
-    const res = await fetch(`${API}/rss/search?q=${encodeURIComponent(q)}&limit=${limit}&offset=${offset}`);
-    data = await res.json();
-  } else {
-    const res = await fetch(`${API}/rss/articles?limit=${limit}&offset=${offset}`);
-    data = await res.json();
-  }
-
-  const entries = data.entries || [];
-  const total = data.total || entries.length;
-
-  app.innerHTML = "";
-  app.append(
-    el("div", { className: "search-bar" },
-      el("input", { type: "text", id: "searchInput", placeholder: "搜索文章...", value: q,
-        onkeydown: e => { if (e.key === "Enter") { location.hash = `#/?q=${encodeURIComponent(e.target.value)}&page=1`; } }
-      }),
-      el("button", { onclick: () => {
-        const v = document.getElementById("searchInput").value;
-        location.hash = `#/?q=${encodeURIComponent(v)}&page=1`;
-      }}, "搜索"),
-      q ? el("button", { className: "btn btn-outline", onclick: () => { location.hash = "#/"; } }, "清除") : ""
-    )
-  );
-
-  if (!q) {
-    app.append(el("div", { className: "feed-actions" },
-      el("button", { className: "btn", onclick: async () => {
-        try {
-          const res = await fetch(`${API}/rss/refresh`, { method: "POST" });
-          const data = await res.json();
-          toast(data.message || "RSS 刷新已开始", res.ok ? "success" : "error");
-        } catch (err) { toast("刷新失败: " + err.message, "error"); }
-      }}, "刷新 RSS"),
-      el("button", { className: "btn btn-outline", onclick: async () => {
-        try {
-          const res = await fetch(`${API}/rss/summarize-missing`, { method: "POST" });
-          const data = await res.json();
-          toast(data.message || "AI 摘要补齐已开始", res.ok ? "success" : "error");
-        } catch (err) { toast("摘要任务启动失败: " + err.message, "error"); }
-      }}, "补 AI 摘要")
-    ));
-  }
-
-  if (entries.length === 0) {
-    app.append(el("div", { className: "empty" },
-      el("h3", {}, q ? `没有找到 "${q}" 相关文章` : "暂无文章"),
-      el("p", {}, q ? "试试其他关键词" : "暂无本地文章，请先触发 RSS 抓取")
-    ));
+function renderFeedList(items) {
+  const host = $("feedList");
+  if (!items.length) {
+    host.innerHTML = `<div class="feed-item"><div class="feed-name">暂无源</div><div class="feed-url">请先导入 OPML 或配置 RSS 源。</div></div>`;
     return;
   }
 
-  entries.forEach(entry => {
-    const card = el("div", { className: "card", onclick: () => {
-      location.hash = `#/article/${encodeURIComponent(entry.link)}`;
-    }},
-      el("div", { className: "source" }, entry.title ? "" : ""),
-      el("h3", {}, entry.title || "(无标题)"),
-      el("div", { className: "meta" },
-        formatDate(entry.date),
-        entry.ai_summary ? el("span", { className: "ai-badge" }, "AI 摘要") : ""
-      ),
-      el("div", { className: "summary" },
-        (entry.ai_summary || entry.summary || "").slice(0, 200) + "..."
-      )
-    );
-    app.append(card);
+  host.innerHTML = items.map((feed) => {
+    const health = state.health?.feeds?.[feed.url] || {};
+    const count = health.count || 0;
+    const badgeClass = count > 0 ? "good" : "bad";
+    const badgeText = count > 0 ? `${count} 篇` : "无数据";
+    return `
+      <div class="feed-item">
+        <div class="feed-name">${escapeHtml(feed.name || feed.url)}</div>
+        <div class="feed-url">${escapeHtml(feed.url)}</div>
+        <div class="badge ${badgeClass}">${badgeText}</div>
+      </div>
+    `;
+  }).join("");
+}
+
+function renderArticleList(items) {
+  const host = $("articleList");
+  if (!items.length) {
+    host.innerHTML = `<div class="feed-item"><div class="feed-name">暂无文章</div><div class="feed-url">试试刷新 RSS，或者搜索别的关键词。</div></div>`;
+    $("pagination").innerHTML = "";
+    return;
+  }
+
+  host.innerHTML = items.map((entry, index) => {
+    const active = state.selected?.link === entry.link ? "active" : "";
+    const snippet = (entry.ai_summary || entry.summary || "").slice(0, 180);
+    return `
+      <article class="article-item ${active}" data-index="${index}">
+        <div class="article-title">${escapeHtml(entry.title || "(无标题)")}</div>
+        <div class="article-meta">
+          <span>${escapeHtml(formatDate(entry.date))}</span>
+          ${entry.ai_summary ? '<span class="badge good">AI 摘要</span>' : ""}
+        </div>
+        <div class="article-snippet">${escapeHtml(snippet || "没有摘要")}${snippet.length >= 180 ? "…" : ""}</div>
+      </article>
+    `;
+  }).join("");
+
+  host.querySelectorAll(".article-item").forEach((node) => {
+    node.addEventListener("click", () => {
+      const entry = items[Number(node.dataset.index)];
+      selectArticle(entry);
+    });
+  });
+}
+
+function renderPagination(total) {
+  const host = $("pagination");
+  const totalPages = Math.max(1, Math.ceil(total / state.limit));
+  if (totalPages <= 1) {
+    host.innerHTML = "";
+    return;
+  }
+
+  const pages = [];
+  const max = Math.min(totalPages, 8);
+  for (let i = 1; i <= max; i += 1) {
+    pages.push(`<button class="${i === state.page ? "active" : ""}" data-page="${i}">${i}</button>`);
+  }
+  host.innerHTML = pages.join("");
+  host.querySelectorAll("button").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      state.page = Number(btn.dataset.page);
+      const route = state.query ? `#/?q=${encodeURIComponent(state.query)}&page=${state.page}` : `#/page/${state.page}`;
+      location.hash = route;
+    });
+  });
+}
+
+function renderDetail(entry) {
+  const host = $("articleDetail");
+  if (!entry) {
+    host.className = "detail-empty";
+    host.innerHTML = "选择一篇文章查看内容、摘要和原文链接。";
+    $("detailSummary").textContent = "未选择文章";
+    return;
+  }
+
+  host.className = "detail";
+  $("detailSummary").textContent = formatDate(entry.date);
+
+  host.innerHTML = `
+    <div class="detail-title">${escapeHtml(entry.title || "(无标题)")}</div>
+    <div class="detail-meta">
+      <span>${escapeHtml(formatDate(entry.date))}</span>
+      ${entry.ai_summary ? '<span class="badge good">AI 摘要</span>' : '<span class="badge bad">暂无 AI</span>'}
+    </div>
+    <div class="detail-section">
+      <h3>AI 摘要</h3>
+      <div class="detail-copy">${escapeHtml(entry.ai_summary || "暂无 AI 摘要")}</div>
+    </div>
+    <div class="detail-section">
+      <h3>原文摘要</h3>
+      <div class="detail-copy">${escapeHtml(entry.summary || "暂无原文摘要")}</div>
+    </div>
+    <div class="detail-section">
+      <h3>正文</h3>
+      <div class="detail-copy">${escapeHtml(entry.content || "暂无正文内容")}</div>
+    </div>
+    <a class="detail-link" href="${entry.link || "#"}" target="_blank" rel="noreferrer">打开原文</a>
+  `;
+}
+
+async function fetchJson(url, options = {}) {
+  const res = await fetch(url, options);
+  const data = await res.json();
+  if (!res.ok) {
+    throw new Error(data?.detail || data?.message || "请求失败");
+  }
+  return data;
+}
+
+async function loadOverview() {
+  const [feeds, health, articles] = await Promise.all([
+    fetchJson(`${API}/rss/feeds`),
+    fetchJson(`${API}/rss/feeds/health`),
+    fetchJson(`${API}/rss/articles?limit=1`),
+  ]);
+  state.feeds = (feeds.feeds || []).map((url) => ({ url, name: url }));
+  state.health = health;
+  $("countArticles").textContent = String(articles.total || 0);
+  $("countFeeds").textContent = String(feeds.feeds?.length || 0);
+  $("countActive").textContent = String(health.active_feeds || 0);
+
+  setOverview({
+    articles: articles.total || 0,
+    feeds: feeds.feeds?.length || 0,
+    active: health.active_feeds || 0,
+    summaries: Object.values(health.feeds || {}).filter((item) => item.count > 0).length,
   });
 
-  // Pagination
-  const totalPages = Math.ceil(total / limit);
-  if (totalPages > 1) {
-    const pag = el("div", { className: "pagination" });
-    for (let i = 1; i <= Math.min(totalPages, 10); i++) {
-      const btn = el("button", { className: i === page ? "active" : "", onclick: () => {
-        location.hash = `#/?q=${encodeURIComponent(q)}&page=${i}`;
-      }}, String(i));
-      pag.append(btn);
-    }
-    app.append(pag);
+  renderFeedList(state.feeds);
+}
+
+async function loadArticles() {
+  const query = state.query.trim();
+  const offset = (state.page - 1) * state.limit;
+  const url = query
+    ? `${API}/rss/search?q=${encodeURIComponent(query)}&limit=${state.limit}&offset=${offset}`
+    : `${API}/rss/articles?limit=${state.limit}&offset=${offset}`;
+  const data = await fetchJson(url);
+
+  state.entries = data.entries || [];
+  $("articleSummary").textContent = query ? `搜索结果 ${data.total || 0} 条` : `最近文章 ${data.total || 0} 条`;
+  renderArticleList(state.entries);
+  renderPagination(data.total || state.entries.length);
+
+  if (!state.selected && state.entries.length) {
+    selectArticle(state.entries[0], false);
   }
 }
 
-// ─── Article Detail ───────────────────────────────────
-async function showArticle(link) {
-  const app = document.getElementById("app");
-  const url = decodeURIComponent(link);
-  app.innerHTML = `<div class="loading">加载中...</div>`;
+async function selectArticle(entry, syncHash = true) {
+  state.selected = entry;
+  renderDetail(entry);
+  renderArticleList(state.entries);
+  if (syncHash) {
+    location.hash = `#/article/${encodeURIComponent(entry.link)}`;
+  }
+}
 
+async function loadArticleByLink(link) {
+  const data = await fetchJson(`${API}/rss/article?link=${encodeURIComponent(link)}`);
+  state.selected = data;
+  renderDetail(data);
+  renderArticleList(state.entries);
+}
+
+async function refreshRSS() {
+  const data = await fetchJson(`${API}/rss/refresh`, { method: "POST" });
+  toast(data.message || "RSS 刷新已开始", "success");
+}
+
+async function fillMissingSummary() {
+  const data = await fetchJson(`${API}/rss/summarize-missing`, { method: "POST" });
+  toast(data.message || "AI 摘要补齐已开始", "success");
+}
+
+function exportOPML() {
+  window.open(`${API}/rss/feeds/export`, "_blank", "noopener");
+}
+
+async function showHome(params) {
+  state.route = "/";
+  state.query = params.get("q") || "";
+  state.page = Number(params.get("page") || "1");
+  $("searchInput").value = state.query;
+  setActiveNav("/");
+  setViewMeta("文章", "搜索、刷新、查看摘要和原文");
+  $("feedSummary").textContent = state.query ? "搜索模式" : "全部 RSS 源";
+  await loadOverview();
+  await loadArticles();
+}
+
+async function showFeeds() {
+  state.route = "/feeds";
+  setActiveNav("/feeds");
+  setViewMeta("源管理", "导入、导出和查看各源文章数量");
+  const data = await fetchJson(`${API}/rss/feeds`);
+  const health = await fetchJson(`${API}/rss/feeds/health`);
+  state.feeds = (data.feeds || []).map((url) => ({ url, name: url }));
+  state.health = health;
+  $("feedSummary").textContent = `${data.feeds?.length || 0} 个源`;
+  $("articleSummary").textContent = "源管理模式";
+  $("articleList").innerHTML = "";
+  $("pagination").innerHTML = "";
+  renderFeedList(state.feeds);
+  renderDetail(null);
+  setOverview({
+    articles: Object.values(health.feeds || {}).reduce((sum, item) => sum + (item.count || 0), 0),
+    feeds: data.feeds?.length || 0,
+    active: health.active_feeds || 0,
+    summaries: Object.values(health.feeds || {}).filter((item) => item.count > 0).length,
+  });
+}
+
+async function showHealth() {
+  state.route = "/health";
+  setActiveNav("/health");
+  setViewMeta("健康状态", "查看各源最近抓取和缓存状态");
+  const health = await fetchJson(`${API}/rss/feeds/health?days=7`);
+  state.health = health;
+  $("feedSummary").textContent = "健康状态";
+  $("articleSummary").textContent = "健康监控模式";
+  $("articleList").innerHTML = "";
+  $("pagination").innerHTML = "";
+  renderFeedList(state.feeds);
+  renderDetail(null);
+  setOverview({
+    articles: Object.values(health.feeds || {}).reduce((sum, item) => sum + (item.count || 0), 0),
+    feeds: health.total_feeds || 0,
+    active: health.active_feeds || 0,
+    summaries: Object.values(health.feeds || {}).filter((item) => item.count > 0).length,
+  });
+}
+
+async function route() {
+  const { path, params } = parseRoute();
   try {
-    const res = await fetch(`${API}/rss/article?link=${encodeURIComponent(url)}`);
-    const entry = await res.json();
-
-    if (!res.ok) {
-      app.innerHTML = `<div class="empty"><h3>文章未找到</h3><p><a href="#/">返回列表</a></p></div>`;
+    if (path.startsWith("/article/")) {
+      state.route = path;
+      setActiveNav("/");
+      setViewMeta("文章详情", "查看原文摘要、AI 摘要和正文");
+      const link = decodeURIComponent(path.replace("/article/", ""));
+      await loadOverview();
+      await loadArticles();
+      await loadArticleByLink(link);
       return;
     }
-
-    app.innerHTML = "";
-    app.append(
-      el("div", { className: "article-detail" },
-        el("button", { className: "btn btn-outline btn-sm", onclick: () => history.back() }, "← 返回"),
-        el("h2", {}, entry.title || "(无标题)"),
-        el("div", { className: "meta" }, formatDate(entry.date) || ""),
-        entry.ai_summary ? el("div", { className: "ai-box" },
-          el("h4", {}, "AI 摘要"),
-          el("p", {}, entry.ai_summary)
-        ) : el("div", { className: "ai-box" }, el("h4", {}, "AI 摘要"), el("p", {}, "暂无 AI 摘要")),
-        entry.summary ? el("div", {}, el("h4", {}, "原文摘要"), el("div", { className: "content" }, entry.summary)) : "",
-        el("p", { style: "margin-top: 16px;" },
-          el("a", { href: entry.link, target: "_blank" }, "→ 阅读原文")
-        )
-      )
-    );
-  } catch (e) {
-    app.innerHTML = `<div class="error">加载失败: ${e.message}</div>`;
+    if (path === "/feeds") {
+      await showFeeds();
+      return;
+    }
+    if (path === "/health") {
+      await showHealth();
+      return;
+    }
+    await showHome(params);
+  } catch (err) {
+    toast(err.message, "error");
   }
 }
 
-// ─── Feed Management ──────────────────────────────────
-async function showFeeds() {
-  const app = document.getElementById("app");
-
-  const [feedsRes, healthRes] = await Promise.all([
-    fetch(`${API}/rss/feeds`),
-    fetch(`${API}/rss/feeds/health`),
-  ]);
-  const feeds = await feedsRes.json();
-  const health = await healthRes.json();
-
-  app.innerHTML = "";
-  app.append(el("h2", { style: "margin-bottom: 16px;" }, "RSS 源管理"));
-
-  // Stats
-  app.append(el("div", { className: "stats-row" },
-    el("div", { className: "stat-card" },
-      el("div", { className: "value blue" }, String(health.total_feeds || feeds.feeds.length)),
-      el("div", { className: "label" }, "总源数")
-    ),
-    el("div", { className: "stat-card" },
-      el("div", { className: "value green" }, String(health.active_feeds || 0)),
-      el("div", { className: "label" }, "活跃源")
-    ),
-    el("div", { className: "stat-card" },
-      el("div", { className: "value" }, String(health.inactive_feeds || 0)),
-      el("div", { className: "label" }, "无数据源")
-    ),
-    el("div", { className: "stat-card" },
-      el("div", { className: "value" }, Object.values(health.feeds || {}).reduce((s, f) => s + f.count, 0)),
-      el("div", { className: "label" }, "近7天文章")
-    )
-  ));
-
-  // Import/Export buttons
-  app.append(el("div", { className: "feed-actions" },
-    el("label", { className: "btn", style: "cursor:pointer;" },
-      "导入 OPML",
-      el("input", { type: "file", accept: ".opml,.xml", style: "display:none;",
-        onchange: async (e) => {
-          const file = e.target.files[0];
-          if (!file) return;
-          const form = new FormData();
-          form.append("file", file);
-          try {
-            const res = await fetch(`${API}/rss/feeds/import`, { method: "POST", body: form });
-            const d = await res.json();
-            if (res.ok) toast(d.message, "success");
-            else toast(d.detail, "error");
-            showFeeds();
-          } catch (err) { toast("导入失败: " + err.message, "error"); }
-        }
-      })
-    ),
-    el("button", { className: "btn btn-outline", onclick: () => {
-      window.open(`${API}/rss/feeds/export`, "_blank");
-    }}, "导出 OPML")
-  ));
-
-  // Feed list
-  app.append(el("h3", { style: "margin-top: 24px; margin-bottom: 8px;" }, "已配置的源"));
-  const list = el("div", { className: "feed-list" });
-  (feeds.feeds || []).forEach(url => {
-    const name = (health.feeds || {})[url]?.source_name || url;
-    const count = (health.feeds || {})[url]?.count || 0;
-    list.append(el("div", { className: "feed-item" },
-      el("div", {},
-        el("div", {}, name.length > 60 ? name.slice(0, 60) + "..." : name),
-        el("div", { className: "url" }, url.slice(0, 80))
-      ),
-      el("span", { className: `badge ${count > 0 ? "active" : "inactive"}` },
-        count > 0 ? `+${count}` : "无数据"
-      )
-    ));
+function wireControls() {
+  $("refreshBtn").addEventListener("click", async () => {
+    try {
+      await refreshRSS();
+    } catch (err) {
+      toast(err.message, "error");
+    }
   });
-  app.append(list);
+  $("summaryBtn").addEventListener("click", async () => {
+    try {
+      await fillMissingSummary();
+    } catch (err) {
+      toast(err.message, "error");
+    }
+  });
+  $("exportBtn").addEventListener("click", exportOPML);
+  $("searchBtn").addEventListener("click", () => {
+    state.page = 1;
+    location.hash = `#/?q=${encodeURIComponent($("searchInput").value || "")}&page=1`;
+  });
+  $("searchInput").addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      $("searchBtn").click();
+    }
+  });
 }
 
-// ─── Feed Health ──────────────────────────────────────
-async function showHealth() {
-  const app = document.getElementById("app");
-  app.innerHTML = `<div class="loading">加载中...</div>`;
-
-  const res = await fetch(`${API}/rss/feeds/health?days=7`);
-  const data = await res.json();
-
-  app.innerHTML = "";
-  app.append(el("h2", { style: "margin-bottom: 16px;" }, "源健康状态"));
-
-  app.append(el("div", { className: "stats-row" },
-    el("div", { className: "stat-card" },
-      el("div", { className: "value blue" }, String(data.total_feeds)),
-      el("div", { className: "label" }, "总计")
-    ),
-    el("div", { className: "stat-card" },
-      el("div", { className: "value green" }, String(data.active_feeds)),
-      el("div", { className: "label" }, "活跃")
-    ),
-    el("div", { className: "stat-card" },
-      el("div", { className: "value" }, String(data.inactive_feeds)),
-      el("div", { className: "label" }, "无数据")
-    ),
-    el("div", { className: "stat-card" },
-      el("div", { className: "value" }, Object.values(data.feeds).reduce((s, f) => s + f.count, 0)),
-      el("div", { className: "label" }, "文章数")
-    )
-  ));
-
-  if (data.inactive_feeds > 0) {
-    app.append(el("h4", { style: "margin-bottom: 8px; color: 'var(--warning)'" }, "无数据的源："));
-    data.inactive_feed_urls.forEach(url => {
-      app.append(el("div", { className: "feed-item" },
-        el("div", { className: "url" }, url),
-        el("span", { className: "badge inactive" }, "无数据")
-      ));
-    });
-  }
-
-  app.append(el("h3", { style: "margin: 24px 0 12px;" }, "源详情"));
-  const grid = el("div", { className: "health-grid" });
-  Object.entries(data.feeds).forEach(([url, info]) => {
-    grid.append(el("div", { className: "health-card" },
-      el("div", { className: "name" }, info.source_name || url.slice(0, 50)),
-      el("div", { className: "stats" }, `文章: ${info.count}`),
-      el("div", { className: "stats" }, info.latest ? `最新: ${formatDate(info.latest)}` : ""),
-      el("span", { className: `badge ${info.count > 0 ? "active" : "inactive"}` },
-        info.count > 0 ? "活跃" : "无数据"
-      )
-    ));
-  });
-  app.append(grid);
-}
+window.addEventListener("hashchange", route);
+window.addEventListener("load", () => {
+  wireControls();
+  route();
+});
