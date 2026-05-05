@@ -1,7 +1,6 @@
 """AI summarizer for RSS entries."""
 
 import asyncio
-import hashlib
 import json
 import logging
 from pathlib import Path
@@ -9,7 +8,8 @@ from typing import Optional
 
 import httpx
 
-from .database import get_article_summary
+from .database import get_article_summary, get_article_summary_by_link
+from .article_identity import compute_article_id, normalize_article_link
 
 logger = logging.getLogger(__name__)
 
@@ -56,7 +56,8 @@ class Summarizer:
     @staticmethod
     def _compute_article_id(entry: dict) -> str:
         link = entry.get("link", "")
-        return hashlib.md5(link.encode()).hexdigest()[:12]
+        normalized_link = normalize_article_link(link)
+        return compute_article_id(normalized_link or link)
 
     def summarize(self, text: str, max_retries: int = 3) -> str:
         """Synchronous summarization with retry."""
@@ -93,9 +94,10 @@ class Summarizer:
 
     async def _summarize_one(self, entry: dict) -> dict:
         """Summarize a single entry with semaphore control and cache check."""
+        link = entry.get("link", "")
         article_id = self._compute_article_id(entry)
 
-        cached_summary = get_article_summary(article_id)
+        cached_summary = get_article_summary_by_link(link) or get_article_summary(article_id)
         if cached_summary:
             entry["ai_summary"] = cached_summary
             return entry
@@ -112,8 +114,9 @@ class Summarizer:
 
         to_summarize = []
         for entry in entries:
+            link = entry.get("link", "")
             article_id = self._compute_article_id(entry)
-            cached_summary = get_article_summary(article_id)
+            cached_summary = get_article_summary_by_link(link) or get_article_summary(article_id)
             if cached_summary:
                 entry["ai_summary"] = cached_summary
                 logger.debug("Skipping cached summary for %s", entry.get("link"))

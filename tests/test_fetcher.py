@@ -69,6 +69,8 @@ class TestFetcherConditionalHeaders:
         assert Fetcher._conditional_headers("https://example.com/rss") == {}
 
 
+
+
 class TestFetcherAsyncContextManager:
     def test_async_context_manager_closes_session(self):
         async def _run():
@@ -76,4 +78,43 @@ class TestFetcherAsyncContextManager:
                 session = await fetcher._get_session()
                 assert not session.closed
             assert session.closed
+        asyncio.run(_run())
+
+
+class TestFetcherFetchAll:
+    def test_fetch_all_yields_entries_from_all_completed_tasks(self, monkeypatch):
+        class FakeResponse:
+            status = 200
+            headers = {}
+
+            def __init__(self, url):
+                self.url = url
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, exc_type, exc_val, exc_tb):
+                return None
+
+            async def text(self):
+                return self.url
+
+        class FakeSession:
+            def get(self, url, headers=None):
+                return FakeResponse(url)
+
+        async def _run():
+            fetcher = Fetcher(semaphore_limit=10)
+
+            async def fake_get_session():
+                return FakeSession()
+
+            monkeypatch.setattr(fetcher, "_get_session", fake_get_session)
+            monkeypatch.setattr("src.fetcher.feedparser.parse", lambda text: type("Feed", (), {"entries": [{"link": text}]})())
+            monkeypatch.setattr(Fetcher, "_record_success", staticmethod(lambda url, response, fetch_ms: None))
+            monkeypatch.setattr(Fetcher, "_record_error", lambda *args, **kwargs: None)
+
+            entries = [entry async for entry in fetcher.fetch_all(["a", "b", "c", "d"])]
+            assert {entry["link"] for entry in entries} == {"a", "b", "c", "d"}
+
         asyncio.run(_run())

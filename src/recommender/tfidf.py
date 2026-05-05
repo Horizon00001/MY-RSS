@@ -1,10 +1,11 @@
 """TF-IDF based content similarity for recommendations."""
 
-import hashlib
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 import numpy as np
+
+from ..article_identity import compute_article_id
 
 try:
     from sklearn.feature_extraction.text import TfidfVectorizer
@@ -43,7 +44,7 @@ class TFIDFRecommender:
 
     def _compute_article_id(self, link: str) -> str:
         """Generate a deterministic ID from article link."""
-        return hashlib.md5(link.encode()).hexdigest()[:12]
+        return compute_article_id(link)
 
     def _get_article_text(self, article: Article) -> str:
         """Combine title and content for vectorization."""

@@ -1,17 +1,19 @@
 """Tests for src/api.py."""
 
+import asyncio
 import pytest
 from unittest.mock import patch, MagicMock, AsyncMock
 from fastapi.testclient import TestClient
 
-from src.api import app, get_feed_parser, get_fetcher, get_state_manager, get_summarizer, normalize_article_link
+from src.api import app, get_feed_parser, get_fetcher, get_state_manager, get_summarizer, normalize_article_link, WSConnectionManager
 
 
 @pytest.fixture
 def client():
     app.dependency_overrides.clear()
-    with TestClient(app) as test_client:
-        yield test_client
+    test_client = TestClient(app)
+    yield test_client
+    test_client.close()
     app.dependency_overrides.clear()
 
 
@@ -105,6 +107,43 @@ class TestNormalizeArticleLink:
         assert normalize_article_link(link) == "https://example.com/news/123"
 
 
+class TestWSConnectionManager:
+    def test_broadcast_sends_concurrently_and_removes_dead_connections(self):
+        class FakeConnection:
+            def __init__(self, name, delay=0, fail=False):
+                self.name = name
+                self.delay = delay
+                self.fail = fail
+                self.started = None
+                self.messages = []
+
+            async def send_json(self, message):
+                self.started = asyncio.get_running_loop().time()
+                if self.delay:
+                    await asyncio.sleep(self.delay)
+                if self.fail:
+                    raise RuntimeError("send failed")
+                self.messages.append(message)
+
+        async def _run():
+            manager = WSConnectionManager()
+            slow = FakeConnection("slow", delay=0.03)
+            fast = FakeConnection("fast")
+            dead = FakeConnection("dead", fail=True)
+            manager.active_connections.update({slow, fast, dead})
+
+            await manager.broadcast({"type": "test"})
+
+            assert slow.messages == [{"type": "test"}]
+            assert fast.messages == [{"type": "test"}]
+            assert abs(slow.started - fast.started) < 0.02
+            assert dead not in manager.active_connections
+            assert slow in manager.active_connections
+            assert fast in manager.active_connections
+
+        asyncio.run(_run())
+
+
 class TestRSSEntries:
     def test_get_entries_no_ai(self, client, mock_fetcher, mock_feed_parser, mock_state_manager):
         """Test /rss/entries without AI summarization."""
@@ -168,6 +207,59 @@ class TestRSSEntries:
         data = response.json()
         assert data["total"] <= 2
 
+    def test_get_entries_ai_limit_stops_fetching_early(self, client):
+        from datetime import datetime, timedelta, timezone
+
+        emitted = []
+        fetch_calls = []
+
+        def make_entry(i):
+            entry = MagicMock()
+            entry.get.side_effect = lambda k, default=None: {
+                "title": f"Title {i}",
+                "link": f"https://example.com/{i}",
+                "summary": f"Summary {i}",
+                "content": f"Content {i}",
+            }.get(k, default)
+            return entry
+
+        async def entry_generator():
+            for i in range(5):
+                fetch_calls.append(i)
+                await __import__("asyncio").sleep(0)
+                yield make_entry(i)
+
+        mock_fetcher_instance = MagicMock()
+        mock_fetcher_instance.fetch_all.return_value = entry_generator()
+
+        mock_feed_parser_instance = MagicMock()
+        mock_feed_parser_instance.get_entry_date.return_value = datetime.now(timezone(timedelta(hours=8)))
+
+        mock_state_manager_instance = MagicMock()
+        mock_state_manager_instance.last_fetch = None
+        mock_state_manager_instance.update_last_fetch.return_value = "2026-05-01 10:00:00 (北京时间)"
+
+        mock_summarizer_instance = MagicMock()
+
+        async def summarize_batch(batch):
+            emitted.extend(item.get("link") for item in batch)
+            return batch
+
+        mock_summarizer_instance.summarize_batch = AsyncMock(side_effect=summarize_batch)
+
+        app.dependency_overrides[get_fetcher] = lambda: mock_fetcher_instance
+        app.dependency_overrides[get_feed_parser] = lambda: mock_feed_parser_instance
+        app.dependency_overrides[get_state_manager] = lambda: mock_state_manager_instance
+        app.dependency_overrides[get_summarizer] = lambda: mock_summarizer_instance
+
+        with patch("src.api.save_entry_to_db", lambda *args, **kwargs: None), patch("src.api._update_db_sync", lambda *args, **kwargs: None):
+            response = client.get("/rss/entries?use_ai=true&limit=2")
+
+        assert response.status_code == 200
+        assert response.json()["total"] == 2
+        assert len(emitted) == 2
+        assert len(fetch_calls) < 5
+
     def test_get_entries_error_handling(self, client):
         """Test error handling when fetching fails - returns empty results gracefully."""
         async def error_generator():
@@ -219,6 +311,7 @@ class TestRSSStream:
     def test_stream_requires_ai(self, client):
         """Test that streaming requires AI summarizer."""
         app.dependency_overrides[get_summarizer] = lambda: None
+        app.dependency_overrides[get_fetcher] = lambda: MagicMock()
 
         response = client.get("/rss/stream?use_ai=true")
 

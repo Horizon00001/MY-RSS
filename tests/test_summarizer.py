@@ -13,6 +13,11 @@ class TestComputeArticleId:
         assert id1 == id2
         assert len(id1) == 12
 
+    def test_normalized_link_produces_same_id(self):
+        id1 = Summarizer._compute_article_id({"link": "https://example.com/a?utm_source=rss"})
+        id2 = Summarizer._compute_article_id({"link": "https://example.com/a"})
+        assert id1 == id2
+
     def test_different_links_different_ids(self):
         id1 = Summarizer._compute_article_id({"link": "https://a.com"})
         id2 = Summarizer._compute_article_id({"link": "https://b.com"})
@@ -45,10 +50,11 @@ class TestSummarize:
             api_key="sk-test",
             api_url="https://api.test.com/v1",
         )
-        monkeypatch.setattr("src.summarizer.get_article_summary", lambda article_id: "Cached summary")
+        monkeypatch.setattr("src.summarizer.get_article_summary_by_link", lambda link: "Cached summary")
+        monkeypatch.setattr("src.summarizer.get_article_summary", lambda article_id: "")
         monkeypatch.setattr(summarizer, "summarize", lambda text: pytest.fail("API should not be called"))
 
-        entries = asyncio.run(summarizer.summarize_batch([{"link": "https://example.com/a"}]))
+        entries = asyncio.run(summarizer.summarize_batch([{"link": "https://example.com/a?utm_source=rss"}]))
 
         assert entries[0]["ai_summary"] == "Cached summary"
 

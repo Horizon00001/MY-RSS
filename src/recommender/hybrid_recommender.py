@@ -1,9 +1,9 @@
 """Hybrid recommender combining content-based and collaborative filtering."""
 
-import hashlib
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
+from ..article_identity import compute_article_id
 from .behavior_tracker import BehaviorTracker
 from .collaborative import CollaborativeRecommender
 from .models import Article
@@ -46,7 +46,7 @@ class HybridRecommender:
 
     def _compute_article_id(self, link: str) -> str:
         """Generate a deterministic ID from article link."""
-        return hashlib.md5(link.encode()).hexdigest()[:12]
+        return compute_article_id(link)
 
     def add_article(self, article: Article):
         """Add an article to the recommendation pool."""

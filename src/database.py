@@ -7,6 +7,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Generator, Optional
 
+from .article_identity import normalize_article_link
 from .config import settings
 
 
@@ -178,12 +179,65 @@ def store_article(
                     source_name = ?,
                     published_at = ?,
                     tags = ?,
-                    ai_summary = ?
+                    ai_summary = COALESCE(NULLIF(?, ''), ai_summary)
                 WHERE {where_column} = ?
                 """,
                 (title, link, summary, content, source_name, published_at, tags_json, ai_summary, where_value),
             )
             return False
+
+
+def batch_store_articles(articles: list[dict]) -> dict[str, int]:
+    """Store or update multiple articles in one transaction."""
+    if not articles:
+        return {"inserted": 0, "updated": 0}
+
+    inserted = 0
+    updated = 0
+    with get_db().get_cursor() as cursor:
+        for article in articles:
+            tags_json = json.dumps(article.get("tags") or [])
+            article_id = article["article_id"]
+            title = article.get("title", "")
+            link = article.get("link", "")
+            normalized_link = article.get("normalized_link", "")
+            summary = article.get("summary", "")
+            content = article.get("content", "")
+            source = article.get("source", "")
+            source_name = article.get("source_name", "")
+            published_at = article.get("published_at")
+            ai_summary = article.get("ai_summary", "")
+
+            try:
+                cursor.execute(
+                    """
+                    INSERT INTO articles (id, title, link, normalized_link, summary, content, source, source_name, published_at, tags, ai_summary)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (article_id, title, link, normalized_link, summary, content, source, source_name, published_at, tags_json, ai_summary),
+                )
+                inserted += 1
+            except sqlite3.IntegrityError:
+                where_column = "normalized_link" if normalized_link else "link"
+                where_value = normalized_link or link
+                cursor.execute(
+                    f"""
+                    UPDATE articles SET
+                        title = ?,
+                        link = ?,
+                        summary = ?,
+                        content = ?,
+                    source = ?,
+                    source_name = ?,
+                    published_at = ?,
+                    tags = ?,
+                    ai_summary = COALESCE(NULLIF(?, ''), ai_summary)
+                WHERE {where_column} = ?
+                """,
+                (title, link, summary, content, source, source_name, published_at, tags_json, ai_summary, where_value),
+                )
+                updated += 1
+    return {"inserted": inserted, "updated": updated}
 
 
 def get_article(article_id: str) -> Optional[dict]:
@@ -410,6 +464,37 @@ def get_article_summary(article_id: str) -> str:
         return row["ai_summary"] if row else ""
 
 
+def get_article_summary_by_link(link: str) -> str:
+    """Return cached AI summary for an article by original or normalized link."""
+    normalized_link = normalize_article_link(link)
+    if not normalized_link and not link:
+        return ""
+
+    with get_db().get_cursor() as cursor:
+        cursor.execute(
+            """
+            SELECT ai_summary
+            FROM articles
+            WHERE ai_summary IS NOT NULL
+              AND ai_summary != ''
+              AND (
+                normalized_link = ?
+                OR link = ?
+              )
+            ORDER BY
+              CASE
+                WHEN normalized_link = ? THEN 0
+                WHEN link = ? THEN 1
+                ELSE 2
+              END
+            LIMIT 1
+            """,
+            (normalized_link, link, normalized_link, link),
+        )
+        row = cursor.fetchone()
+        return row["ai_summary"] if row else ""
+
+
 def update_article_summary(article_id: str, ai_summary: str) -> None:
     """Update AI summary for a single article."""
     with get_db().get_cursor() as cursor:
@@ -422,11 +507,29 @@ def update_article_summary(article_id: str, ai_summary: str) -> None:
 def batch_update_summaries(summaries: list[dict]) -> int:
     """Batch update AI summaries. Each dict must have 'id' and 'ai_summary'."""
     with get_db().get_cursor() as cursor:
-        cursor.executemany(
-            "UPDATE articles SET ai_summary = :ai_summary WHERE id = :id",
-            summaries,
-        )
-        return cursor.rowcount
+        updated = 0
+        for summary in summaries:
+            ai_summary = summary.get("ai_summary", "")
+            if not ai_summary:
+                continue
+
+            article_id = summary.get("id", "")
+            link = summary.get("link", "")
+            normalized_link = normalize_article_link(summary.get("normalized_link") or link)
+            cursor.execute(
+                """
+                UPDATE articles
+                SET ai_summary = ?
+                WHERE (
+                    (? != '' AND id = ?)
+                    OR (? != '' AND normalized_link = ?)
+                    OR (? != '' AND link = ?)
+                )
+                """,
+                (ai_summary, article_id, article_id, normalized_link, normalized_link, link, link),
+            )
+            updated += cursor.rowcount
+        return updated
 
 
 def search_articles(keyword: str, limit: int = 50, offset: int = 0) -> list[dict]:

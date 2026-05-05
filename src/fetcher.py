@@ -103,16 +103,18 @@ class Fetcher:
                     return []
 
         tasks = {asyncio.create_task(fetch_task(url)): url for url in urls}
-        done = set()
-        while len(done) < len(tasks):
-            completed, _ = await asyncio.wait(
-                tasks.keys(), return_when=asyncio.FIRST_COMPLETED
-            )
-            for task in completed:
-                for entry in task.result():
-                    yield entry
-                done.add(task)
-                del tasks[task]
+        try:
+            while tasks:
+                completed, _ = await asyncio.wait(
+                    tasks.keys(), return_when=asyncio.FIRST_COMPLETED
+                )
+                for task in completed:
+                    for entry in task.result():
+                        yield entry
+                    del tasks[task]
+        finally:
+            for task in tasks:
+                task.cancel()
 
     @staticmethod
     def _conditional_headers(url: str) -> dict[str, str]:

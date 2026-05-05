@@ -1,7 +1,6 @@
 """FastAPI application for RSS API."""
 
 import asyncio
-import hashlib
 import json
 import logging
 from contextlib import asynccontextmanager
@@ -9,7 +8,6 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Optional, Set
-from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 from xml.etree import ElementTree as ET
 
 from fastapi import BackgroundTasks, Depends, FastAPI, File, HTTPException, Query, UploadFile, WebSocket, WebSocketDisconnect
@@ -18,13 +16,14 @@ from fastapi.responses import PlainTextResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 from .config import settings
+from .article_identity import compute_article_id, normalize_article_link
 from .fetcher import Fetcher
 from .feed_parser import FeedParser
 from .models import RSSEntry, RSSResponse
 from .state_manager import StateManager
 from .summarizer import Summarizer
 from .database import (
-    store_article,
+    batch_store_articles,
     get_db,
     get_article_by_link,
     batch_update_summaries,
@@ -40,35 +39,6 @@ from .recommender.api import router as recommender_router
 logger = logging.getLogger(__name__)
 
 BEIJING_TZ = timezone(timedelta(hours=8))
-TRACKING_QUERY_PREFIXES = ("utm_",)
-TRACKING_QUERY_KEYS = {
-    "fbclid",
-    "gclid",
-    "igshid",
-    "mc_cid",
-    "mc_eid",
-}
-
-
-def normalize_article_link(link: str) -> str:
-    """Normalize article URLs so tracking variants deduplicate correctly."""
-    if not link:
-        return ""
-
-    parsed = urlsplit(link.strip())
-    scheme = "https" if parsed.scheme in {"http", "https"} else parsed.scheme.lower()
-    netloc = parsed.netloc.lower()
-    path = parsed.path.rstrip("/") or parsed.path
-    query = urlencode(
-        [
-            (key, value)
-            for key, value in parse_qsl(parsed.query, keep_blank_values=True)
-            if not key.lower().startswith(TRACKING_QUERY_PREFIXES)
-            and key.lower() not in TRACKING_QUERY_KEYS
-        ],
-        doseq=True,
-    )
-    return urlunsplit((scheme, netloc, path, query, ""))
 
 
 # Factory functions for dependency injection
@@ -110,14 +80,26 @@ class WSConnectionManager:
     async def broadcast(self, message: dict):
         """Broadcast message to all connected clients."""
         async with self._lock:
-            dead_connections = set()
-            for connection in self.active_connections:
-                try:
-                    await connection.send_json(message)
-                except Exception:
-                    dead_connections.add(connection)
-            for conn in dead_connections:
-                self.active_connections.discard(conn)
+            connections = list(self.active_connections)
+
+        async def send_one(connection: WebSocket):
+            try:
+                await connection.send_json(message)
+                return None
+            except Exception:
+                return connection
+
+        dead_connections = {
+            connection
+            for connection in await asyncio.gather(
+                *(send_one(connection) for connection in connections)
+            )
+            if connection is not None
+        }
+
+        if dead_connections:
+            async with self._lock:
+                self.active_connections.difference_update(dead_connections)
 
     @property
     def client_count(self) -> int:
@@ -256,41 +238,56 @@ def format_db_article(article: dict) -> RSSEntry:
     )
 
 
-def save_entry_to_db(entry: dict, feed_parser: FeedParser):
-    """Save an entry to the database."""
+def entry_to_article_row(entry: dict, feed_parser: FeedParser) -> dict:
     try:
         entry_obj = SimpleNamespace(**entry) if isinstance(entry, dict) else entry
         entry_date = feed_parser.get_entry_date(entry_obj)
     except Exception as e:
         logger.debug("Failed to parse entry for DB: %s", e)
         entry_date = None
-    article_id = hashlib.md5(entry.get("link", "").encode()).hexdigest()[:12]
+    link = entry.get("link", "")
+    return {
+        "article_id": compute_article_id(link),
+        "title": entry.get("title", ""),
+        "link": link,
+        "normalized_link": normalize_article_link(link),
+        "summary": entry_text(entry.get("summary", "")),
+        "content": entry_text(entry.get("content", "")),
+        "source": entry.get("source", ""),
+        "source_name": entry.get("feed_title", ""),
+        "published_at": entry_date,
+        "tags": [],
+    }
 
+
+def save_entries_to_db(entries: list, feed_parser: FeedParser) -> None:
+    if not entries:
+        return
     try:
-        store_article(
-            article_id=article_id,
-            title=entry.get("title", ""),
-            link=entry.get("link", ""),
-            normalized_link=normalize_article_link(entry.get("link", "")),
-            summary=entry_text(entry.get("summary", "")),
-            content=entry_text(entry.get("content", "")),
-            source=entry.get("source", ""),
-            source_name=entry.get("feed_title", ""),
-            published_at=entry_date,
-            tags=[],
-        )
+        batch_store_articles([entry_to_article_row(entry, feed_parser) for entry in entries])
     except Exception as e:
-        logger.warning("Failed to store article to DB: %s", e)
+        logger.warning("Failed to batch store articles to DB: %s", e)
+
+
+def save_entry_to_db(entry: dict, feed_parser: FeedParser):
+    """Save an entry to the database."""
+    save_entries_to_db([entry], feed_parser)
 
 
 def _update_db_sync(entries: list):
     """Update DB with AI summaries using batch update."""
     summaries = []
     for entry in entries:
-        article_id = hashlib.md5(entry.get("link", "").encode()).hexdigest()[:12]
+        article_id = compute_article_id(entry.get("link", ""))
         ai_summary = entry.get("ai_summary", "")
         if ai_summary and article_id:
-            summaries.append({"id": article_id, "ai_summary": ai_summary})
+            link = entry.get("link", "")
+            summaries.append({
+                "id": article_id,
+                "link": link,
+                "normalized_link": normalize_article_link(link),
+                "ai_summary": ai_summary,
+            })
     if summaries:
         try:
             batch_update_summaries(summaries)
@@ -324,15 +321,22 @@ async def get_rss_entries(
     cutoff = now - timedelta(days=days)
 
     urls = list(settings.rss_feeds.values())
+    target_count = offset + limit if limit else None
 
     # Pipeline: fetch -> filter -> summarize -> format
     queue: asyncio.Queue = asyncio.Queue(maxsize=100)
     results: list = []
     seen_links: set = set()
+    entries_to_store: list = []
     summarizer_done = asyncio.Event()
+    stop_fetching = asyncio.Event()
+    queued_count = 0
 
     async def fetcher_worker():
+        nonlocal queued_count
         async for entry in fetcher.fetch_all(urls):
+            if stop_fetching.is_set():
+                break
             link = entry.get("link", "")
             norm = normalize_article_link(link)
             if not link or norm in seen_links:
@@ -342,15 +346,22 @@ async def get_rss_entries(
             if last_fetch:
                 if entry_date and entry_date > last_fetch:
                     await queue.put(entry)
-                    save_entry_to_db(entry, feed_parser)
+                    queued_count += 1
+                    entries_to_store.append(entry)
+                    if target_count and queued_count >= target_count:
+                        stop_fetching.set()
             else:
                 if entry_date and entry_date > cutoff:
                     await queue.put(entry)
-                    save_entry_to_db(entry, feed_parser)
+                    queued_count += 1
+                    entries_to_store.append(entry)
+                    if target_count and queued_count >= target_count:
+                        stop_fetching.set()
         await queue.put(None)
 
     async def summarizer_worker():
         batch: list = []
+        batch_size = min(10, target_count) if target_count else 10
         while True:
             entry = await queue.get()
             if entry is None:
@@ -361,7 +372,7 @@ async def get_rss_entries(
                 summarizer_done.set()
                 break
             batch.append(entry)
-            if len(batch) >= 10:
+            if len(batch) >= batch_size:
                 if summarizer:
                     summarized = await summarizer.summarize_batch(batch)
                     results.extend(summarized)
@@ -369,14 +380,26 @@ async def get_rss_entries(
                 else:
                     results.extend(batch)
                 batch = []
-                if limit and len(results) >= limit:
+                if target_count and len(results) >= target_count:
+                    stop_fetching.set()
                     summarizer_done.set()
                     break
         if batch and not summarizer:
             results.extend(batch)
 
     if summarizer and use_ai:
-        await asyncio.gather(fetcher_worker(), summarizer_worker())
+        fetch_task = asyncio.create_task(fetcher_worker())
+        summarize_task = asyncio.create_task(summarizer_worker())
+        await summarize_task
+        if fetch_task.done():
+            await fetch_task
+        else:
+            stop_fetching.set()
+            fetch_task.cancel()
+            try:
+                await fetch_task
+            except asyncio.CancelledError:
+                pass
     else:
         try:
             async for entry in fetcher.fetch_all(urls):
@@ -389,15 +412,17 @@ async def get_rss_entries(
                 if last_fetch:
                     if entry_date and entry_date > last_fetch:
                         results.append(entry)
-                        save_entry_to_db(entry, feed_parser)
+                        entries_to_store.append(entry)
                 else:
                     if entry_date and entry_date > cutoff:
                         results.append(entry)
-                        save_entry_to_db(entry, feed_parser)
+                        entries_to_store.append(entry)
                 if limit and len(results) >= limit:
                     break
         except Exception as e:
             logger.warning("Fetch failed in non-AI path: %s", e)
+
+    save_entries_to_db(entries_to_store, feed_parser)
 
     if limit:
         results = results[offset:offset + limit]
@@ -456,7 +481,7 @@ async def refresh_rss_entries_once() -> int:
     fetcher = get_fetcher()
     cutoff = datetime.now(BEIJING_TZ) - timedelta(days=settings.default_days)
     seen_links = set()
-    saved = 0
+    entries_to_store = []
     async for entry in fetcher.fetch_all(list(settings.rss_feeds.values())):
         link = entry.get("link", "")
         norm = normalize_article_link(link)
@@ -465,9 +490,9 @@ async def refresh_rss_entries_once() -> int:
         seen_links.add(norm)
         entry_date = feed_parser.get_entry_date(entry)
         if entry_date and entry_date > cutoff:
-            save_entry_to_db(entry, feed_parser)
-            saved += 1
-    return saved
+            entries_to_store.append(entry)
+    save_entries_to_db(entries_to_store, feed_parser)
+    return len(entries_to_store)
 
 
 @app.get("/rss/stream", summary="流式获取RSS内容")
