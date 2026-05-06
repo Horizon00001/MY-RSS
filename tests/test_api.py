@@ -329,3 +329,50 @@ class TestRSSStream:
         response = client.get("/rss/stream?use_ai=true")
 
         assert response.status_code == 400
+
+    def test_stream_with_ai_returns_sse(self, client):
+        from datetime import datetime, timedelta, timezone
+
+        def make_entry(i):
+            entry = MagicMock()
+            entry.get.side_effect = lambda k, default=None: {
+                "title": f"Title {i}",
+                "link": f"https://example.com/{i}",
+                "summary": f"Summary {i}",
+                "content": f"Content {i}",
+            }.get(k, default)
+            return entry
+
+        async def entry_generator():
+            for i in range(4):
+                yield make_entry(i)
+
+        mock_fetcher_instance = MagicMock()
+        mock_fetcher_instance.fetch_all.return_value = entry_generator()
+
+        mock_feed_parser_instance = MagicMock()
+        mock_feed_parser_instance.get_entry_date.return_value = datetime.now(timezone(timedelta(hours=8)))
+
+        mock_state_manager_instance = MagicMock()
+        mock_state_manager_instance.last_fetch = None
+
+        mock_summarizer_instance = MagicMock()
+
+        async def summarize_batch(batch):
+            return batch
+
+        mock_summarizer_instance.summarize_batch = AsyncMock(side_effect=summarize_batch)
+
+        app.dependency_overrides[get_fetcher] = lambda: mock_fetcher_instance
+        app.dependency_overrides[get_feed_parser] = lambda: mock_feed_parser_instance
+        app.dependency_overrides[get_state_manager] = lambda: mock_state_manager_instance
+        app.dependency_overrides[get_summarizer] = lambda: mock_summarizer_instance
+
+        response = client.get("/rss/stream?use_ai=true&limit=2")
+
+        assert response.status_code == 200
+        assert response.headers["content-type"].startswith("text/event-stream")
+        body = response.text
+        assert body.count("data: ") == 2
+        assert "Title 0" in body
+        assert "Title 1" in body
