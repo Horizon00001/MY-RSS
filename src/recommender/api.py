@@ -1,38 +1,69 @@
 """FastAPI routes for recommendation system."""
 
 from datetime import datetime, timedelta, timezone
-from typing import Optional
+from typing import TYPE_CHECKING, Any, Optional
 
 from fastapi import APIRouter, HTTPException, Query
 
+from ..article_identity import compute_article_id, normalize_article_link
 from ..config import settings
 from ..fetcher import Fetcher
 from ..feed_parser import FeedParser
 from ..models import RSSEntry
 from .behavior_tracker import BehaviorTracker
-from .hybrid_recommender import HybridRecommender
-from .models import Article, RecommendationResponse
+
+if TYPE_CHECKING:
+    from .hybrid_recommender import HybridRecommender
+    from .models import Article
 
 BEIJING_TZ = timezone(timedelta(hours=8))
 
 router = APIRouter(prefix="/recommend", tags=["recommendations"])
 
 # Global instances
-fetcher = Fetcher()
 feed_parser = FeedParser()
 tracker = BehaviorTracker(settings.reading_history_file)
-recommender: Optional[HybridRecommender] = None
+recommender: Optional["HybridRecommender"] = None
 
 
-def get_recommender() -> HybridRecommender:
+def _recommendation_unavailable(exc: ImportError) -> HTTPException:
+    return HTTPException(
+        status_code=503,
+        detail="Recommendation system is unavailable because optional dependencies are missing",
+    )
+
+
+def _load_hybrid_recommender_class():
+    try:
+        from .hybrid_recommender import HybridRecommender
+    except ImportError as exc:
+        raise _recommendation_unavailable(exc) from exc
+
+    return HybridRecommender
+
+
+def _load_recommender_defaults() -> tuple[int, int]:
+    try:
+        from .hybrid_recommender import DEFAULT_RECOMMENDER_DAYS, DEFAULT_RECOMMENDER_LIMIT
+    except ImportError as exc:
+        raise _recommendation_unavailable(exc) from exc
+
+    return DEFAULT_RECOMMENDER_DAYS, DEFAULT_RECOMMENDER_LIMIT
+
+
+def get_recommender() -> "HybridRecommender":
     """Get or create recommender instance."""
     global recommender
     if recommender is None:
-        recommender = HybridRecommender(
-            tracker=tracker,
-            alpha=0.6,  # Weight for content-based filtering
-            curated_pool_size=100,
-        )
+        HybridRecommender = _load_hybrid_recommender_class()
+        try:
+            recommender = HybridRecommender(
+                tracker=tracker,
+                alpha=0.6,
+                curated_pool_size=100,
+            )
+        except ImportError as exc:
+            raise _recommendation_unavailable(exc) from exc
     return recommender
 
 
@@ -49,13 +80,17 @@ def format_entry(entry: dict) -> RSSEntry:
     )
 
 
-def article_from_entry(entry: dict) -> Article:
+def article_from_entry(entry: dict) -> "Article":
     """Convert raw entry to Article model."""
+    from .models import Article
+
     entry_date = feed_parser.get_entry_date(type("E", (), entry)())
+    link = entry.get("link", "")
+    normalized_link = normalize_article_link(link)
     return Article(
-        id="",
+        id=compute_article_id(normalized_link or link),
         title=entry.get("title", ""),
-        link=entry.get("link", ""),
+        link=link,
         summary=entry.get("summary", ""),
         content=entry.get("content", ""),
         source=entry.get("source", ""),
@@ -64,7 +99,7 @@ def article_from_entry(entry: dict) -> Article:
     )
 
 
-@router.get("/", response_model=RecommendationResponse, summary="获取推荐内容")
+@router.get("/", response_model=None, summary="获取推荐内容")
 async def get_recommendations(
     user_id: str = Query(default="default", description="用户ID"),
     top_k: int = Query(default=20, ge=1, le=100, description="返回数量"),
@@ -84,6 +119,8 @@ async def get_recommendations(
         await refresh_recommender(rec)
 
     articles = rec.recommend(user_id=user_id, top_k=top_k)
+
+    from .models import RecommendationResponse
 
     return RecommendationResponse(
         articles=articles,
@@ -131,10 +168,12 @@ async def refresh_index(
     return {"status": "refreshed", "last_refresh": rec.last_refresh}
 
 
-async def refresh_recommender(rec: HybridRecommender):
+async def refresh_recommender(rec: "HybridRecommender"):
     """Refresh recommender with latest articles from DB."""
+    recommender_days, recommender_limit = _load_recommender_defaults()
+
     # Load articles from database
-    rec.load_articles_from_db(days=7, limit=1000)
+    rec.load_articles_from_db(days=recommender_days, limit=recommender_limit)
 
     # If no articles in DB, fetch and store
     if not rec.articles:
@@ -143,20 +182,19 @@ async def refresh_recommender(rec: HybridRecommender):
 
         urls = list(settings.rss_feeds.values())
 
-        async for entry in fetcher.fetch_all(urls):
-            entry_date = feed_parser.get_entry_date(entry)
-            if entry_date and entry_date > cutoff:
-                article = article_from_entry(entry)
-                rec.add_article(article)
-
-                # Store to database
-                store_article_to_db(article)
+        async with Fetcher() as fetcher:
+            async for entry in fetcher.fetch_all(urls):
+                entry_date = feed_parser.get_entry_date(entry)
+                if entry_date and entry_date > cutoff:
+                    article = article_from_entry(entry)
+                    rec.add_article(article)
+                    store_article_to_db(article)
 
     # Rebuild index
     rec.build()
 
 
-def store_article_to_db(article: Article):
+def store_article_to_db(article: Any):
     """Store article to database."""
     from ..database import store_article as db_store_article
 
@@ -170,6 +208,7 @@ def store_article_to_db(article: Article):
         source_name=article.source_name,
         published_at=article.date,
         tags=article.tags,
+        normalized_link=normalize_article_link(article.link),
     )
 
 
@@ -185,7 +224,7 @@ async def get_popular(
     # Sort by date, return most recent
     articles = sorted(
         rec.articles.values(),
-        key=lambda a: a.date or datetime.min,
+        key=lambda a: a.date or datetime.min.replace(tzinfo=BEIJING_TZ),
         reverse=True,
     )
 

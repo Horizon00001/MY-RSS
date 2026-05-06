@@ -11,6 +11,27 @@ from .realtime import RealtimeCollaborativeFilter
 from .tfidf import TFIDFRecommender
 
 
+BEIJING_TZ = timezone(timedelta(hours=8))
+DEFAULT_RECOMMENDER_DAYS = 7
+DEFAULT_RECOMMENDER_LIMIT = 1000
+
+
+def parse_db_datetime(value) -> datetime | None:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        parsed = value
+    elif isinstance(value, str):
+        try:
+            parsed = datetime.fromisoformat(value)
+        except ValueError:
+            return None
+    else:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=BEIJING_TZ)
+    return parsed.astimezone(timezone.utc)
+
 class HybridRecommender:
     """
     Hybrid recommender combining:
@@ -61,7 +82,7 @@ class HybridRecommender:
         self.articles[article.id] = article
         self.curated_articles.append(article)
 
-    def load_articles_from_db(self, days: int = 7, limit: int = 1000):
+    def load_articles_from_db(self, days: int = DEFAULT_RECOMMENDER_DAYS, limit: int = DEFAULT_RECOMMENDER_LIMIT):
         """Load articles from database."""
         from ..database import get_recent_articles
 
@@ -76,7 +97,7 @@ class HybridRecommender:
                 content=row["content"] or "",
                 source=row["source"] or "",
                 source_name=row["source_name"] or "",
-                date=row["published_at"],
+                date=parse_db_datetime(row["published_at"]),
                 tags=row.get("tags") or [],
             )
             self.articles[article.id] = article

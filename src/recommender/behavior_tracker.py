@@ -8,6 +8,18 @@ from ..database import record_interaction as db_record_interaction, get_db
 from .models import UserInteraction
 
 
+def parse_interaction_timestamp(value) -> datetime:
+    if isinstance(value, datetime):
+        parsed = value
+    elif isinstance(value, str):
+        parsed = datetime.fromisoformat(value)
+    else:
+        parsed = datetime.now(timezone.utc)
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
 class BehaviorTracker:
     """Tracks user reading behavior and computes preferences."""
 
@@ -64,7 +76,7 @@ class BehaviorTracker:
                 article_id=row["article_id"],
                 action=row["action"],
                 weight=row["weight"],
-                timestamp=datetime.fromisoformat(row["created_at"]) if isinstance(row["created_at"], str) else row["created_at"],
+                timestamp=parse_interaction_timestamp(row["created_at"]),
             )
             for row in rows
         ]
