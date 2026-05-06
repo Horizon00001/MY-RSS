@@ -2,6 +2,7 @@
 
 import pytest
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 from src.feed_parser import FeedParser
@@ -20,15 +21,13 @@ class TestFeedParser:
         return FeedParser()
 
     def test_get_entry_date_with_updated(self, parser):
-        entry = MagicMock()
-        entry.updated = "2026-04-19T10:00:00Z"
+        entry = SimpleNamespace(updated="2026-04-19T10:00:00Z")
         result = parser.get_entry_date(entry)
         assert result is not None
         assert result.tzinfo is not None
 
     def test_get_entry_date_with_published(self, parser):
-        entry = MagicMock()
-        entry.published = "2026-04-19T10:00:00Z"
+        entry = SimpleNamespace(published="2026-04-19T10:00:00Z")
         result = parser.get_entry_date(entry)
         assert result is not None
         assert result.tzinfo is not None
@@ -40,25 +39,23 @@ class TestFeedParser:
 
     def test_filter_by_date_within_range(self, parser):
         now = datetime.now(BEIJING_TZ)
-        entry = MagicMock()
-        entry.updated = (now - timedelta(hours=1)).isoformat()
+        entry = SimpleNamespace(updated=(now - timedelta(hours=1)).isoformat())
         result = parser.filter_by_date([entry], days=7)
         assert len(result) == 1
 
     def test_filter_by_date_out_of_range(self, parser):
-        entry = MagicMock()
-        entry.updated = "2020-01-01T00:00:00Z"
+        entry = SimpleNamespace(updated="2020-01-01T00:00:00Z")
         result = parser.filter_by_date([entry], days=7)
         assert len(result) == 0
 
     def test_parse_entry(self, parser):
         entry = MagicMock()
-        entry.get.side_effect = lambda k: {
+        entry.get.side_effect = lambda k, default=None: {
             "title": "Test Title",
             "link": "https://example.com/article",
             "summary": "Test summary",
             "content": "Test content",
-        }.get(k)
+        }.get(k, default)
         result = parser.parse_entry(entry)
         assert result["title"] == "Test Title"
         assert result["link"] == "https://example.com/article"
@@ -108,4 +105,4 @@ class TestModels:
 class TestSummarizer:
     def test_summarizer_init_no_key(self):
         with pytest.raises(ValueError):
-            Summarizer(api_key="invalid_key")
+            Summarizer(api_key="your_api_key_here")

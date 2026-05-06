@@ -8,6 +8,19 @@ from fastapi.testclient import TestClient
 from src.api import app, get_feed_parser, get_fetcher, get_state_manager, get_summarizer, normalize_article_link, WSConnectionManager
 
 
+def test_src_api_preserves_public_imports():
+    import src.api as api
+
+    assert api.app is app
+    assert api.get_feed_parser is get_feed_parser
+    assert api.get_fetcher is get_fetcher
+    assert api.get_state_manager is get_state_manager
+    assert api.get_summarizer is get_summarizer
+    assert api.normalize_article_link is normalize_article_link
+    assert api.WSConnectionManager is WSConnectionManager
+
+
+
 @pytest.fixture
 def client():
     app.dependency_overrides.clear()
@@ -252,7 +265,7 @@ class TestRSSEntries:
         app.dependency_overrides[get_state_manager] = lambda: mock_state_manager_instance
         app.dependency_overrides[get_summarizer] = lambda: mock_summarizer_instance
 
-        with patch("src.api.save_entry_to_db", lambda *args, **kwargs: None), patch("src.api._update_db_sync", lambda *args, **kwargs: None):
+        with patch("src.api.save_entries_to_db", lambda *args, **kwargs: None), patch("src.api._update_db_sync", lambda *args, **kwargs: None):
             response = client.get("/rss/entries?use_ai=true&limit=2")
 
         assert response.status_code == 200
