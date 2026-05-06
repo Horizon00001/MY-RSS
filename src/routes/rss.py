@@ -1,9 +1,5 @@
 """RSS HTTP routes."""
 
-import asyncio
-import json
-import logging
-from datetime import datetime, timedelta
 from typing import Optional
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
@@ -22,18 +18,17 @@ from ..database import (
 from ..dependencies import get_feed_parser, get_fetcher, get_state_manager, get_summarizer
 from ..feed_parser import FeedParser
 from ..fetcher import Fetcher
-from ..formatting import BEIJING_TZ, format_db_article, format_entry
+from ..formatting import format_db_article
 from ..models import RSSEntry, RSSResponse
 from ..rss_service import (
-    _update_db_sync,
+    build_rss_entries_response,
+    iter_rss_stream_events,
     refresh_rss_entries_once,
-    save_entries_to_db,
     summarize_missing_articles,
 )
 from ..state_manager import StateManager
 from ..summarizer import Summarizer
 
-logger = logging.getLogger(__name__)
 router = APIRouter()
 
 @router.get("/", summary="API根路径")
@@ -53,132 +48,18 @@ async def get_rss_entries(
     fetcher: Fetcher = Depends(get_fetcher),
     summarizer: Optional[Summarizer] = Depends(get_summarizer),
 ):
-    last_fetch = state_manager.last_fetch if incremental else None
-    is_incremental = incremental and last_fetch is not None
-
-    if days is None:
-        days = settings.default_days
-    now = datetime.now(BEIJING_TZ)
-    cutoff = now - timedelta(days=days)
-
-    urls = list(settings.rss_feeds.values())
-    target_count = offset + limit if limit else None
-
-    # Pipeline: fetch -> filter -> summarize -> format
-    queue: asyncio.Queue = asyncio.Queue(maxsize=100)
-    results: list = []
-    seen_links: set = set()
-    entries_to_store: list = []
-    summarizer_done = asyncio.Event()
-    stop_fetching = asyncio.Event()
-    queued_count = 0
-
-    async def fetcher_worker():
-        nonlocal queued_count
-        async for entry in fetcher.fetch_all(urls):
-            if stop_fetching.is_set():
-                break
-            link = entry.get("link", "")
-            norm = normalize_article_link(link)
-            if not link or norm in seen_links:
-                continue
-            seen_links.add(norm)
-            entry_date = feed_parser.get_entry_date(entry)
-            if last_fetch:
-                if entry_date and entry_date > last_fetch:
-                    await queue.put(entry)
-                    queued_count += 1
-                    entries_to_store.append(entry)
-                    if target_count and queued_count >= target_count:
-                        stop_fetching.set()
-            else:
-                if entry_date and entry_date > cutoff:
-                    await queue.put(entry)
-                    queued_count += 1
-                    entries_to_store.append(entry)
-                    if target_count and queued_count >= target_count:
-                        stop_fetching.set()
-        await queue.put(None)
-
-    async def summarizer_worker():
-        batch: list = []
-        batch_size = min(10, target_count) if target_count else 10
-        while True:
-            entry = await queue.get()
-            if entry is None:
-                if batch and summarizer:
-                    summarized = await summarizer.summarize_batch(batch)
-                    results.extend(summarized)
-                    await asyncio.to_thread(api_attr("_update_db_sync", _update_db_sync), summarized)
-                summarizer_done.set()
-                break
-            batch.append(entry)
-            if len(batch) >= batch_size:
-                if summarizer:
-                    summarized = await summarizer.summarize_batch(batch)
-                    results.extend(summarized)
-                    await asyncio.to_thread(api_attr("_update_db_sync", _update_db_sync), summarized)
-                else:
-                    results.extend(batch)
-                batch = []
-                if target_count and len(results) >= target_count:
-                    stop_fetching.set()
-                    summarizer_done.set()
-                    break
-        if batch and not summarizer:
-            results.extend(batch)
-
-    if summarizer and use_ai:
-        fetch_task = asyncio.create_task(fetcher_worker())
-        summarize_task = asyncio.create_task(summarizer_worker())
-        await summarize_task
-        if fetch_task.done():
-            await fetch_task
-        else:
-            stop_fetching.set()
-            fetch_task.cancel()
-            try:
-                await fetch_task
-            except asyncio.CancelledError:
-                pass
-    else:
-        try:
-            async for entry in fetcher.fetch_all(urls):
-                link = entry.get("link", "")
-                norm = normalize_article_link(link)
-                if not link or norm in seen_links:
-                    continue
-                seen_links.add(norm)
-                entry_date = feed_parser.get_entry_date(entry)
-                if last_fetch:
-                    if entry_date and entry_date > last_fetch:
-                        results.append(entry)
-                        entries_to_store.append(entry)
-                else:
-                    if entry_date and entry_date > cutoff:
-                        results.append(entry)
-                        entries_to_store.append(entry)
-                if limit and len(results) >= limit:
-                    break
-        except Exception as e:
-            logger.warning("Fetch failed in non-AI path: %s", e)
-
-    api_attr("save_entries_to_db", save_entries_to_db)(entries_to_store, feed_parser)
-
-    if limit:
-        results = results[offset:offset + limit]
-    elif offset:
-        results = results[offset:]
-
-    formatted = [format_entry(e, feed_parser) for e in results]
-    last_fetch_str = state_manager.update_last_fetch()
-
-    return RSSResponse(
-        total=len(formatted),
-        entries=formatted,
-        incremental=is_incremental,
-        last_fetch=last_fetch_str if is_incremental else None,
+    return await build_rss_entries_response(
+        days=days,
+        limit=limit,
+        offset=offset,
+        incremental=incremental,
+        use_ai=use_ai,
+        state_manager=state_manager,
+        feed_parser=feed_parser,
+        fetcher=fetcher,
+        summarizer=summarizer,
     )
+
 
 @router.post("/rss/refresh", summary="后台刷新RSS")
 async def refresh_rss(background_tasks: BackgroundTasks):
@@ -204,69 +85,19 @@ async def stream_rss_entries(
     fetcher: Fetcher = Depends(get_fetcher),
     summarizer: Optional[Summarizer] = Depends(get_summarizer),
 ):
-    last_fetch = state_manager.last_fetch if incremental else None
-
-    if days is None:
-        days = settings.default_days
-    now = datetime.now(BEIJING_TZ)
-    cutoff = now - timedelta(days=days)
-
-    urls = list(settings.rss_feeds.values())
-
     if use_ai and not summarizer:
         raise HTTPException(status_code=400, detail="AI summarizer not available")
 
-    async def generate():
-        queue: asyncio.Queue = asyncio.Queue(maxsize=50)
-        yielded = 0
-
-        async def fetcher_worker():
-            async for entry in fetcher.fetch_all(urls):
-                entry_date = feed_parser.get_entry_date(entry)
-                if last_fetch:
-                    if entry_date and entry_date > last_fetch:
-                        await queue.put(entry)
-                else:
-                    if entry_date and entry_date > cutoff:
-                        await queue.put(entry)
-            await queue.put(None)
-
-        fetcher_task = asyncio.create_task(fetcher_worker())
-        batch: list = []
-
-        try:
-            while yielded < limit:
-                entry = await queue.get()
-                if entry is None:
-                    if batch and summarizer:
-                        summarized = await summarizer.summarize_batch(batch)
-                        for s in summarized:
-                            if yielded >= limit:
-                                break
-                            yield f"data: {json.dumps(format_entry(s, feed_parser).model_dump(), ensure_ascii=False)}\n\n"
-                            yielded += 1
-                    break
-                batch.append(entry)
-                if len(batch) >= 3:
-                    to_summarize = batch
-                    batch = []
-                    if summarizer:
-                        summarized = await summarizer.summarize_batch(to_summarize)
-                        to_summarize = summarized
-                    for s in to_summarize:
-                        if yielded >= limit:
-                            break
-                        yield f"data: {json.dumps(format_entry(s, feed_parser).model_dump(), ensure_ascii=False)}\n\n"
-                        yielded += 1
-        finally:
-            fetcher_task.cancel()
-            try:
-                await fetcher_task
-            except asyncio.CancelledError:
-                pass
-
     return StreamingResponse(
-        generate(),
+        iter_rss_stream_events(
+            days=days,
+            limit=limit,
+            incremental=incremental,
+            state_manager=state_manager,
+            feed_parser=feed_parser,
+            fetcher=fetcher,
+            summarizer=summarizer,
+        ),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",
