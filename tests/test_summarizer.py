@@ -50,13 +50,56 @@ class TestSummarize:
             api_key="sk-test",
             api_url="https://api.test.com/v1",
         )
-        monkeypatch.setattr("src.summarizer.get_article_summary_by_link", lambda link: "Cached summary")
-        monkeypatch.setattr("src.summarizer.get_article_summary", lambda article_id: "")
+        monkeypatch.setattr("src.summarizer.batch_get_article_summaries", lambda articles: {articles[0]["id"]: "Cached summary"})
         monkeypatch.setattr(summarizer, "summarize", lambda text: pytest.fail("API should not be called"))
 
         entries = asyncio.run(summarizer.summarize_batch([{"link": "https://example.com/a?utm_source=rss"}]))
 
         assert entries[0]["ai_summary"] == "Cached summary"
+
+    def test_summarize_batch_uses_one_batch_cache_lookup_and_preserves_order(self, monkeypatch):
+        summarizer = Summarizer(
+            api_key="sk-test",
+            api_url="https://api.test.com/v1",
+        )
+        batch_calls = []
+        single_link_calls = []
+        single_id_calls = []
+
+        def fake_batch_lookup(articles):
+            batch_calls.append(list(articles))
+            return {
+                "cached-by-id": "Cached by id",
+                Summarizer._compute_article_id({"link": "https://example.com/cached-by-link?utm_campaign=app"}): "Cached by normalized link",
+            }
+
+        monkeypatch.setattr("src.summarizer.batch_get_article_summaries", fake_batch_lookup)
+        monkeypatch.setattr("src.summarizer.get_article_summary_by_link", lambda link: single_link_calls.append(link) or "")
+        monkeypatch.setattr("src.summarizer.get_article_summary", lambda article_id: single_id_calls.append(article_id) or "")
+        monkeypatch.setattr(summarizer, "summarize", lambda text: f"Generated: {text}")
+
+        entries = [
+            {"id": "cached-by-id", "link": "https://example.com/cached-by-id", "summary": "should not summarize"},
+            {"link": "https://example.com/new", "summary": "new summary"},
+            {"link": "https://example.com/cached-by-link?utm_campaign=app", "summary": "should not summarize either"},
+        ]
+
+        result = asyncio.run(summarizer.summarize_batch(entries))
+
+        assert result is entries
+        assert [entry["ai_summary"] for entry in result] == [
+            "Cached by id",
+            "Generated: new summary",
+            "Cached by normalized link",
+        ]
+        assert len(batch_calls) == 1
+        assert [item["id"] for item in batch_calls[0]] == [
+            "cached-by-id",
+            Summarizer._compute_article_id({"link": "https://example.com/new"}),
+            Summarizer._compute_article_id({"link": "https://example.com/cached-by-link?utm_campaign=app"}),
+        ]
+        assert single_link_calls == []
+        assert single_id_calls == []
 
 
 class TestInit:

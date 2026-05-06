@@ -8,7 +8,7 @@ from typing import Optional
 
 import httpx
 
-from .database import get_article_summary, get_article_summary_by_link
+from .database import batch_get_article_summaries, get_article_summary, get_article_summary_by_link
 from .article_identity import compute_article_id, normalize_article_link
 
 logger = logging.getLogger(__name__)
@@ -92,31 +92,43 @@ class Summarizer:
                 return f"[总结失败: {e}]"
         return "[总结失败]"
 
+    async def _summarize_uncached_one(self, entry: dict) -> dict:
+        """Summarize a single entry known to be missing from the cache."""
+        async with self._semaphore:
+            content = _entry_text(entry.get("content")) or _entry_text(entry.get("summary"))
+            entry["ai_summary"] = await asyncio.to_thread(self.summarize, content)
+            return entry
+
     async def _summarize_one(self, entry: dict) -> dict:
         """Summarize a single entry with semaphore control and cache check."""
         link = entry.get("link", "")
-        article_id = self._compute_article_id(entry)
+        article_id = entry.get("id") or self._compute_article_id(entry)
 
         cached_summary = get_article_summary_by_link(link) or get_article_summary(article_id)
         if cached_summary:
             entry["ai_summary"] = cached_summary
             return entry
 
-        async with self._semaphore:
-            content = _entry_text(entry.get("content")) or _entry_text(entry.get("summary"))
-            entry["ai_summary"] = await asyncio.to_thread(self.summarize, content)
-            return entry
+        return await self._summarize_uncached_one(entry)
 
     async def summarize_batch(self, entries: list[dict]) -> list[dict]:
         """Summarize multiple entries concurrently, skipping already-cached ones."""
         if not entries:
             return entries
 
-        to_summarize = []
+        cache_requests = []
         for entry in entries:
-            link = entry.get("link", "")
-            article_id = self._compute_article_id(entry)
-            cached_summary = get_article_summary_by_link(link) or get_article_summary(article_id)
+            article_id = entry.get("id") or self._compute_article_id(entry)
+            cache_requests.append({
+                "id": article_id,
+                "link": entry.get("link", ""),
+                "normalized_link": normalize_article_link(entry.get("link", "")),
+            })
+
+        cached_summaries = batch_get_article_summaries(cache_requests)
+        to_summarize = []
+        for entry, cache_request in zip(entries, cache_requests):
+            cached_summary = cached_summaries.get(cache_request["id"], "")
             if cached_summary:
                 entry["ai_summary"] = cached_summary
                 logger.debug("Skipping cached summary for %s", entry.get("link"))
@@ -126,7 +138,7 @@ class Summarizer:
         if to_summarize:
             logger.info("Summarizing %d new entries (skipped %d cached)",
                         len(to_summarize), len(entries) - len(to_summarize))
-            tasks = [self._summarize_one(entry) for entry in to_summarize]
+            tasks = [self._summarize_uncached_one(entry) for entry in to_summarize]
             await asyncio.gather(*tasks)
 
         return entries
