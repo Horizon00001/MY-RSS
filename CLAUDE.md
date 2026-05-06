@@ -25,10 +25,14 @@ API docs at `http://localhost:8000/docs`
 ## Test
 
 ```bash
+cd /home/default/Projects/MY-RSS
 source venv/bin/activate
-pytest -v                    # run all tests
-pytest tests/test_api.py -v   # run single test file
+pytest tests/test_config.py tests/test_feed_parser.py tests/test_fetcher.py tests/test_database.py -v  # fast focused checks
+pytest tests/test_api.py -v                                                                  # run API tests
+pytest -v                                                                                    # run all tests before handoff
 ```
+
+`pytest.ini` limits collection to `tests/` and defines `unit`, `integration`, and `slow` markers. Mark future long-running tests with `@pytest.mark.slow`; do not hide current tests from the default full suite unless they are intentionally slow.
 
 ## Architecture
 
@@ -42,7 +46,10 @@ The refactored `src/` module follows clean architecture:
 | `summarizer.py` | DeepSeek API integration for AI summaries with batch concurrency |
 | `state_manager.py` | Tracks last fetch time for incremental updates |
 | `models.py` | Pydantic request/response models |
-| `api.py` | FastAPI routes - fetch pipeline with optional AI summarization |
+| `api.py` | Compatibility facade that exports the FastAPI app and legacy imports |
+| `app_setup.py` | FastAPI app creation, static file mounting, lifespan, and router registration |
+| `routes/` | HTTP/WebSocket route handlers with dependency injection |
+| `rss_service.py` | RSS fetch/filter/summarize/store workflows used by routes |
 
 ### Data Flow
 ```
