@@ -134,8 +134,8 @@ def import_feeds_to_config(
     if added > 0:
         with open(config_path, "w", encoding="utf-8") as f:
             ini.write(f)
-        # Reload settings
-        settings._load_ini_config()
+        # Reload the same config file that was just updated.
+        settings._load_ini_config(config_path)
         logger.info("Imported %d feeds, skipped %d duplicates", added, skipped)
 
     return {"added": added, "skipped": skipped, "total": added + skipped}

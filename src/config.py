@@ -6,7 +6,7 @@ from typing import Any, Optional
 
 import configparser
 from dotenv import load_dotenv
-from pydantic import Field
+from pydantic import ConfigDict, Field
 from pydantic_settings import BaseSettings
 
 
@@ -49,10 +49,11 @@ class Settings(BaseSettings):
     db_user: Optional[str] = None
     db_password: Optional[str] = None
 
-    class Config:
-        env_file = ".env"
-        env_file_encoding = "utf-8"
-        extra = "ignore"
+    model_config = ConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
 
     def __init__(self, **kwargs: Any):
         super().__init__(**kwargs)
