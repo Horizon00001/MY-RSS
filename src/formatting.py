@@ -27,6 +27,7 @@ def format_entry(entry: dict, feed_parser: FeedParser) -> RSSEntry:
         date=entry_date.strftime("%Y-%m-%d %H:%M:%S (北京时间)") if entry_date else None,
         content=entry_text(entry.get("content", "")),
         ai_summary=entry.get("ai_summary", ""),
+        is_read=bool(entry.get("is_read", False)),
     )
 
 
@@ -58,6 +59,7 @@ def format_db_article(article: dict) -> RSSEntry:
         date=date,
         content=article.get("content", ""),
         ai_summary=article.get("ai_summary", ""),
+        is_read=bool(article.get("is_read", False)),
     )
 
 
@@ -81,4 +83,3 @@ def entry_to_article_row(entry: dict, feed_parser: FeedParser) -> dict:
         "published_at": entry_date,
         "tags": [],
     }
-

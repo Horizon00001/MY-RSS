@@ -13,6 +13,7 @@ from .database import (
     list_feed_statuses,
     list_recent_articles,
     search_articles,
+    set_article_read_state,
 )
 from .dependencies import get_feed_parser, get_fetcher, get_state_manager, get_summarizer
 from .formatting import (
@@ -43,6 +44,7 @@ from .routes.rss import (
     search_rss,
     stream_rss_entries,
     summarize_missing,
+    update_article_read_state,
 )
 from .routes.websocket import _trigger_fetch_and_broadcast, websocket_rss
 from .websocket_manager import WSConnectionManager, ws_manager

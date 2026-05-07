@@ -15,6 +15,7 @@ class RSSEntry(BaseModel):
     date: Optional[str] = None
     content: str = ""
     ai_summary: str = ""
+    is_read: bool = False
 
     def to_dict(self) -> dict:
         return self.model_dump()

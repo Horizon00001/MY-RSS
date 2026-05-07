@@ -93,6 +93,13 @@ class TestLocalArticles:
             assert data["total"] == 0
             assert data["entries"] == []
 
+    def test_get_local_articles_filters_by_read_status(self, client):
+        with patch("src.api.list_recent_articles", return_value=[]) as list_recent:
+            response = client.get("/rss/articles?read_status=unread")
+
+        assert response.status_code == 200
+        list_recent.assert_called_once_with(limit=20, offset=0, days=30, read_status="unread")
+
     def test_get_local_article_by_link(self, client):
         with patch("src.api.get_article_by_link", return_value={
             "title": "Test Article",
@@ -101,11 +108,27 @@ class TestLocalArticles:
             "content": "Content",
             "ai_summary": "AI summary",
             "published_at": "2026-05-01 10:00:00",
+            "is_read": 0,
         }):
             response = client.get("/rss/article?link=https%3A%2F%2Fexample.com%2Fa")
 
         assert response.status_code == 200
         assert response.json()["title"] == "Test Article"
+        assert response.json()["is_read"] is False
+
+    def test_update_article_read_state(self, client):
+        with patch("src.api.set_article_read_state", return_value=True) as set_read_state:
+            response = client.post("/rss/article/read-state?link=https%3A%2F%2Fexample.com%2Fa&is_read=true")
+
+        assert response.status_code == 200
+        assert response.json()["is_read"] is True
+        set_read_state.assert_called_once_with("https://example.com/a", True)
+
+    def test_update_article_read_state_returns_404_for_missing_article(self, client):
+        with patch("src.api.set_article_read_state", return_value=False):
+            response = client.post("/rss/article/read-state?link=https%3A%2F%2Fexample.com%2Fmissing&is_read=true")
+
+        assert response.status_code == 404
 
 
 class TestNormalizeArticleLink:

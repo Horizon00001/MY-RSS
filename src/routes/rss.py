@@ -14,6 +14,7 @@ from ..database import (
     list_feed_statuses,
     list_recent_articles,
     search_articles,
+    set_article_read_state,
 )
 from ..dependencies import get_feed_parser, get_fetcher, get_state_manager, get_summarizer
 from ..feed_parser import FeedParser
@@ -117,11 +118,29 @@ async def get_local_articles(
     days: int = Query(default=30, ge=1, le=365, description="读取最近几天的本地文章"),
     limit: int = Query(default=20, ge=1, le=100, description="返回条目数量限制"),
     offset: int = Query(default=0, ge=0, description="跳过的条目数"),
+    read_status: str = Query(default="all", pattern="^(all|read|unread)$", description="按已读状态过滤"),
 ):
     """Return articles already stored in SQLite without fetching RSS or calling AI."""
-    articles = api_attr("list_recent_articles", list_recent_articles)(limit=limit, offset=offset, days=days)
+    articles = api_attr("list_recent_articles", list_recent_articles)(
+        limit=limit,
+        offset=offset,
+        days=days,
+        read_status=read_status,
+    )
     entries = [format_db_article(article) for article in articles]
     return RSSResponse(total=len(entries), entries=entries)
+
+
+@router.post("/rss/article/read-state", summary="更新文章已读状态")
+async def update_article_read_state(
+    link: str = Query(default=..., description="文章链接"),
+    is_read: bool = Query(default=True, description="是否标记为已读"),
+):
+    """Mark a stored article as read or unread."""
+    updated = api_attr("set_article_read_state", set_article_read_state)(link, is_read)
+    if not updated:
+        raise HTTPException(status_code=404, detail="文章未找到")
+    return {"link": link, "is_read": is_read}
 
 
 @router.get("/rss/article", response_model=RSSEntry, summary="获取单篇本地文章")
@@ -152,9 +171,10 @@ async def search_rss(
     q: str = Query(default=..., description="搜索关键词"),
     limit: int = Query(default=50, description="返回数量"),
     offset: int = Query(default=0, description="偏移量"),
+    read_status: str = Query(default="all", pattern="^(all|read|unread)$", description="按已读状态过滤"),
 ):
     """Search articles by keyword in title, summary, content, and AI summaries."""
-    entries = api_attr("search_articles", search_articles)(q, limit=limit, offset=offset)
+    entries = api_attr("search_articles", search_articles)(q, limit=limit, offset=offset, read_status=read_status)
     return {"query": q, "total": len(entries), "entries": entries}
 
 

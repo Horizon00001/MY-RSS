@@ -4,6 +4,7 @@ const state = {
   query: "",
   page: 1,
   limit: 18,
+  readStatus: "all",
   entries: [],
   selected: null,
   feeds: [],
@@ -114,12 +115,14 @@ function renderArticleList(items) {
 
   host.innerHTML = items.map((entry, index) => {
     const active = state.selected?.link === entry.link ? "active" : "";
+    const readClass = entry.is_read ? "is-read" : "is-unread";
     const snippet = (entry.ai_summary || entry.summary || "").slice(0, 180);
     return `
-      <article class="article-item ${active}" data-index="${index}">
+      <article class="article-item ${active} ${readClass}" data-index="${index}">
         <div class="article-title">${escapeHtml(entry.title || "(无标题)")}</div>
         <div class="article-meta">
           <span>${escapeHtml(formatDate(entry.date))}</span>
+          ${entry.is_read ? '<span class="badge read">已读</span>' : '<span class="badge unread">未读</span>'}
           ${entry.ai_summary ? '<span class="badge good">AI 摘要</span>' : ""}
         </div>
         <div class="article-snippet">${escapeHtml(snippet || "没有摘要")}${snippet.length >= 180 ? "…" : ""}</div>
@@ -152,8 +155,7 @@ function renderPagination(total) {
   host.querySelectorAll("button").forEach((btn) => {
     btn.addEventListener("click", () => {
       state.page = Number(btn.dataset.page);
-      const route = state.query ? `#/?q=${encodeURIComponent(state.query)}&page=${state.page}` : `#/page/${state.page}`;
-      location.hash = route;
+      location.hash = homeHash({ query: state.query, page: state.page, readStatus: state.readStatus });
     });
   });
 }
@@ -174,7 +176,11 @@ function renderDetail(entry) {
     <div class="detail-title">${escapeHtml(entry.title || "(无标题)")}</div>
     <div class="detail-meta">
       <span>${escapeHtml(formatDate(entry.date))}</span>
+      ${entry.is_read ? '<span class="badge read">已读</span>' : '<span class="badge unread">未读</span>'}
       ${entry.ai_summary ? '<span class="badge good">AI 摘要</span>' : '<span class="badge bad">暂无 AI</span>'}
+    </div>
+    <div class="detail-actions">
+      <button class="detail-action-btn" id="readToggleBtn">${entry.is_read ? "标为未读" : "标为已读"}</button>
     </div>
     <div class="detail-section">
       <h3>AI 摘要</h3>
@@ -190,6 +196,17 @@ function renderDetail(entry) {
     </div>
     <a class="detail-link" href="${entry.link || "#"}" target="_blank" rel="noreferrer">打开原文</a>
   `;
+
+  $("readToggleBtn").addEventListener("click", async () => {
+    try {
+      await setReadState(entry, !entry.is_read);
+      renderDetail(entry);
+      renderArticleList(state.entries);
+      toast(entry.is_read ? "已标记为已读" : "已标记为未读", "success");
+    } catch (err) {
+      toast(err.message, "error");
+    }
+  });
 }
 
 async function fetchJson(url, options = {}) {
@@ -226,22 +243,31 @@ async function loadOverview() {
 async function loadArticles() {
   const query = state.query.trim();
   const offset = (state.page - 1) * state.limit;
+  const readStatusParam = `read_status=${encodeURIComponent(state.readStatus)}`;
   const url = query
-    ? `${API}/rss/search?q=${encodeURIComponent(query)}&limit=${state.limit}&offset=${offset}`
-    : `${API}/rss/articles?limit=${state.limit}&offset=${offset}`;
+    ? `${API}/rss/search?q=${encodeURIComponent(query)}&limit=${state.limit}&offset=${offset}&${readStatusParam}`
+    : `${API}/rss/articles?limit=${state.limit}&offset=${offset}&${readStatusParam}`;
   const data = await fetchJson(url);
 
   state.entries = data.entries || [];
-  $("articleSummary").textContent = query ? `搜索结果 ${data.total || 0} 条` : `最近文章 ${data.total || 0} 条`;
+  const statusText = { all: "全部", unread: "未读", read: "已读" }[state.readStatus] || "全部";
+  $("articleSummary").textContent = query ? `搜索 ${statusText} ${data.total || 0} 条` : `${statusText}文章 ${data.total || 0} 条`;
   renderArticleList(state.entries);
   renderPagination(data.total || state.entries.length);
 
   if (!state.selected && state.entries.length) {
-    selectArticle(state.entries[0], false);
+    selectArticle(state.entries[0], false, false);
   }
 }
 
-async function selectArticle(entry, syncHash = true) {
+async function selectArticle(entry, syncHash = true, markRead = true) {
+  if (markRead && !entry.is_read) {
+    try {
+      await setReadState(entry, true);
+    } catch (err) {
+      toast(err.message, "error");
+    }
+  }
   state.selected = entry;
   renderDetail(entry);
   renderArticleList(state.entries);
@@ -252,9 +278,27 @@ async function selectArticle(entry, syncHash = true) {
 
 async function loadArticleByLink(link) {
   const data = await fetchJson(`${API}/rss/article?link=${encodeURIComponent(link)}`);
+  if (!data.is_read) {
+    try {
+      await setReadState(data, true);
+    } catch (err) {
+      toast(err.message, "error");
+    }
+  }
   state.selected = data;
   renderDetail(data);
   renderArticleList(state.entries);
+}
+
+async function setReadState(entry, isRead) {
+  await fetchJson(`${API}/rss/article/read-state?link=${encodeURIComponent(entry.link)}&is_read=${isRead}`, {
+    method: "POST",
+  });
+  entry.is_read = isRead;
+  const match = state.entries.find((item) => item.link === entry.link);
+  if (match) {
+    match.is_read = isRead;
+  }
 }
 
 async function refreshRSS() {
@@ -275,7 +319,9 @@ async function showHome(params) {
   state.route = "/";
   state.query = params.get("q") || "";
   state.page = Number(params.get("page") || "1");
+  state.readStatus = normalizeReadStatus(params.get("read"));
   $("searchInput").value = state.query;
+  syncReadFilter();
   setActiveNav("/");
   setViewMeta("文章", "搜索、刷新、查看摘要和原文");
   $("feedSummary").textContent = state.query ? "搜索模式" : "全部 RSS 源";
@@ -370,7 +416,7 @@ function wireControls() {
   $("exportBtn").addEventListener("click", exportOPML);
   $("searchBtn").addEventListener("click", () => {
     state.page = 1;
-    location.hash = `#/?q=${encodeURIComponent($("searchInput").value || "")}&page=1`;
+    location.hash = homeHash({ query: $("searchInput").value || "", page: 1, readStatus: state.readStatus });
   });
   $("searchInput").addEventListener("keydown", (event) => {
     if (event.key === "Enter") {
@@ -378,6 +424,31 @@ function wireControls() {
       $("searchBtn").click();
     }
   });
+  $("readFilter").querySelectorAll("button").forEach((button) => {
+    button.addEventListener("click", () => {
+      state.readStatus = button.dataset.status || "all";
+      state.page = 1;
+      location.hash = homeHash({ query: state.query, page: 1, readStatus: state.readStatus });
+    });
+  });
+}
+
+function homeHash({ query = "", page = 1, readStatus = "all" } = {}) {
+  const params = new URLSearchParams();
+  if (query) params.set("q", query);
+  params.set("page", String(page));
+  if (readStatus !== "all") params.set("read", readStatus);
+  return `#/?${params.toString()}`;
+}
+
+function syncReadFilter() {
+  $("readFilter").querySelectorAll("button").forEach((button) => {
+    button.classList.toggle("active", button.dataset.status === state.readStatus);
+  });
+}
+
+function normalizeReadStatus(value) {
+  return ["all", "read", "unread"].includes(value) ? value : "all";
 }
 
 window.addEventListener("hashchange", route);

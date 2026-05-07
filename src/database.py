@@ -11,7 +11,7 @@ from .article_identity import normalize_article_link
 from .config import settings
 
 
-CURRENT_SCHEMA_VERSION = 2
+CURRENT_SCHEMA_VERSION = 3
 _MAX_BATCH_QUERY_PARAMS = 900
 
 
@@ -73,7 +73,9 @@ class Database:
                 published_at TIMESTAMP,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 tags TEXT,
-                ai_summary TEXT
+                ai_summary TEXT,
+                is_read INTEGER DEFAULT 0,
+                read_at TIMESTAMP
             )
         """)
         cursor.execute("""
@@ -104,6 +106,8 @@ class Database:
     def _migrate_schema(self, cursor: sqlite3.Cursor) -> None:
         self._add_column_if_missing(cursor, "articles", "normalized_link", "TEXT")
         self._add_column_if_missing(cursor, "articles", "ai_summary", "TEXT")
+        self._add_column_if_missing(cursor, "articles", "is_read", "INTEGER DEFAULT 0")
+        self._add_column_if_missing(cursor, "articles", "read_at", "TIMESTAMP")
         cursor.execute(f"PRAGMA user_version = {CURRENT_SCHEMA_VERSION}")
 
     def _create_indexes(self, cursor: sqlite3.Cursor) -> None:
@@ -125,6 +129,11 @@ class Database:
             cursor,
             "idx_user_interactions_user_id",
             "CREATE INDEX idx_user_interactions_user_id ON user_interactions(user_id, created_at DESC)",
+        )
+        self._create_index_if_missing(
+            cursor,
+            "idx_articles_is_read_published_at",
+            "CREATE INDEX idx_articles_is_read_published_at ON articles(is_read, published_at DESC)",
         )
 
     @staticmethod
@@ -325,19 +334,43 @@ def get_recent_articles(limit: int = 100, days: int = 7) -> list[dict]:
         return [dict(row) for row in cursor.fetchall()]
 
 
-def list_recent_articles(limit: int = 20, offset: int = 0, days: int = 30) -> list[dict]:
+def list_recent_articles(limit: int = 20, offset: int = 0, days: int = 30, read_status: str = "all") -> list[dict]:
     """List recent articles from the local database without fetching feeds."""
+    status_clause = ""
+    params: list = [days]
+    if read_status == "read":
+        status_clause = "AND is_read = 1"
+    elif read_status == "unread":
+        status_clause = "AND COALESCE(is_read, 0) = 0"
+
     with get_db().get_cursor() as cursor:
         cursor.execute(
-            """
+            f"""
             SELECT * FROM articles
             WHERE published_at > datetime('now', '-' || ? || ' days')
+            {status_clause}
             ORDER BY published_at DESC
             LIMIT ? OFFSET ?
             """,
-            (days, limit, offset),
+            (*params, limit, offset),
         )
         return [dict(row) for row in cursor.fetchall()]
+
+
+def set_article_read_state(link: str, is_read: bool) -> bool:
+    """Mark an article as read or unread by original or normalized link."""
+    normalized_link = normalize_article_link(link)
+    with get_db().get_cursor() as cursor:
+        cursor.execute(
+            """
+            UPDATE articles
+            SET is_read = ?,
+                read_at = CASE WHEN ? = 1 THEN CURRENT_TIMESTAMP ELSE NULL END
+            WHERE link = ? OR normalized_link = ?
+            """,
+            (1 if is_read else 0, 1 if is_read else 0, link, normalized_link),
+        )
+        return cursor.rowcount > 0
 
 
 def get_feed_status(feed_url: str) -> Optional[dict]:
@@ -653,14 +686,21 @@ def batch_update_summaries(summaries: list[dict]) -> int:
         return updated
 
 
-def search_articles(keyword: str, limit: int = 50, offset: int = 0) -> list[dict]:
+def search_articles(keyword: str, limit: int = 50, offset: int = 0, read_status: str = "all") -> list[dict]:
     """Search articles by keyword in title, summary, and content."""
+    status_clause = ""
+    if read_status == "read":
+        status_clause = "AND is_read = 1"
+    elif read_status == "unread":
+        status_clause = "AND COALESCE(is_read, 0) = 0"
+
     with get_db().get_cursor() as cursor:
         pattern = f"%{keyword}%"
         cursor.execute(
-            """
+            f"""
             SELECT * FROM articles
-            WHERE title LIKE ? OR summary LIKE ? OR content LIKE ? OR ai_summary LIKE ?
+            WHERE (title LIKE ? OR summary LIKE ? OR content LIKE ? OR ai_summary LIKE ?)
+            {status_clause}
             ORDER BY published_at DESC
             LIMIT ? OFFSET ?
             """,

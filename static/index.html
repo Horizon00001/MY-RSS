@@ -69,7 +69,14 @@
       <div class="pane pane-list">
         <div class="pane-head">
           <h2>文章</h2>
-          <span class="pane-sub" id="articleSummary">等待加载</span>
+          <div class="pane-actions">
+            <div class="segmented" id="readFilter">
+              <button type="button" data-status="all" class="active">全部</button>
+              <button type="button" data-status="unread">未读</button>
+              <button type="button" data-status="read">已读</button>
+            </div>
+            <span class="pane-sub" id="articleSummary">等待加载</span>
+          </div>
         </div>
         <div id="articleList" class="article-list"></div>
         <div id="pagination" class="pagination"></div>
