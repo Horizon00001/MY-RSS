@@ -1,9 +1,11 @@
 """AI summarizer for RSS entries."""
 
 import asyncio
+import html
 import json
 import logging
 from pathlib import Path
+import re
 from typing import Optional
 
 import httpx
@@ -13,7 +15,24 @@ from .article_identity import compute_article_id, normalize_article_link
 
 logger = logging.getLogger(__name__)
 
-SUMMARIZE_PROMPT = """你是一个新闻摘要助手。请用50-150字总结以下内容，提取关键信息。直接输出摘要，不要其他解释：
+_HTML_TAG_RE = re.compile(r"<[^>]+>")
+_WHITESPACE_RE = re.compile(r"\s+")
+
+SUMMARIZE_PROMPT = """你是一个 RSS 新闻摘要编辑。请基于输入内容生成高信息密度摘要。
+
+要求：
+- 使用简体中文，保留必要的英文专有名词、产品名、人名和数字。
+- 只总结原文明确出现的信息，不要编造背景、结论或影响。
+- 优先说明“发生了什么 / 谁受影响 / 关键数字或时间 / 为什么值得看”。
+- 如果输入信息不足，请明确写出“信息不足”，不要假装确定。
+- 直接输出 2-3 行纯文本，不要 Markdown，不要列表符号，不要额外解释。
+
+输出格式：
+一句话：不超过 45 个中文字符概括核心事件或观点。
+要点：1-2 句补充关键事实、背景、数字或争议。
+看点：说明这条内容对读者的意义；如果无法判断，写“信息不足，无法判断”。
+
+输入内容：
 
 {content}
 """
@@ -82,7 +101,7 @@ class Summarizer:
                 )
                 response.raise_for_status()
                 result = response.json()["choices"][0]["message"]["content"] or ""
-                return result
+                return result.strip()
             except Exception as e:
                 logger.warning("AI summarize attempt %d failed: %s", attempt + 1, e)
                 if attempt < max_retries - 1:
@@ -95,7 +114,7 @@ class Summarizer:
     async def _summarize_uncached_one(self, entry: dict) -> dict:
         """Summarize a single entry known to be missing from the cache."""
         async with self._semaphore:
-            content = _entry_text(entry.get("content")) or _entry_text(entry.get("summary"))
+            content = _entry_summary_text(entry)
             entry["ai_summary"] = await asyncio.to_thread(self.summarize, content)
             return entry
 
@@ -155,3 +174,29 @@ def _entry_text(value) -> str:
     if isinstance(value, list):
         return "\n".join(_entry_text(item) for item in value if item)
     return str(value)
+
+
+def _clean_text(value) -> str:
+    """Normalize RSS text fields before sending them to the summary model."""
+    text = _entry_text(value)
+    if not text:
+        return ""
+    text = _HTML_TAG_RE.sub(" ", text)
+    text = html.unescape(text)
+    return _WHITESPACE_RE.sub(" ", text).strip()
+
+
+def _entry_summary_text(entry: dict) -> str:
+    """Build a structured article payload for summarization."""
+    title = _clean_text(entry.get("title"))
+    source = _clean_text(entry.get("source_name") or entry.get("feed_title") or entry.get("source"))
+    content = _clean_text(entry.get("content")) or _clean_text(entry.get("summary"))
+
+    parts = []
+    if title:
+        parts.append(f"标题：{title}")
+    if source:
+        parts.append(f"来源：{source}")
+    if content:
+        parts.append(f"正文：{content}")
+    return "\n".join(parts)

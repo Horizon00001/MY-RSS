@@ -3,7 +3,7 @@
 import pytest
 import asyncio
 
-from src.summarizer import SUMMARIZE_PROMPT, Summarizer
+from src.summarizer import SUMMARIZE_PROMPT, Summarizer, _entry_summary_text
 
 
 class TestComputeArticleId:
@@ -89,7 +89,7 @@ class TestSummarize:
         assert result is entries
         assert [entry["ai_summary"] for entry in result] == [
             "Cached by id",
-            "Generated: new summary",
+            "Generated: 正文：new summary",
             "Cached by normalized link",
         ]
         assert len(batch_calls) == 1
@@ -100,6 +100,36 @@ class TestSummarize:
         ]
         assert single_link_calls == []
         assert single_id_calls == []
+
+    def test_summarize_batch_uses_title_source_and_clean_body(self, monkeypatch):
+        summarizer = Summarizer(
+            api_key="sk-test",
+            api_url="https://api.test.com/v1",
+        )
+        seen_texts = []
+
+        monkeypatch.setattr("src.summarizer.batch_get_article_summaries", lambda articles: {})
+
+        def fake_summarize(text):
+            seen_texts.append(text)
+            return "一句话：测试摘要\n要点：测试要点\n看点：测试看点"
+
+        monkeypatch.setattr(summarizer, "summarize", fake_summarize)
+
+        entries = asyncio.run(summarizer.summarize_batch([
+            {
+                "title": "  Test <b>Title</b> ",
+                "link": "https://example.com/new",
+                "source_name": "Example Feed",
+                "summary": "fallback summary",
+                "content": "<p>Alpha&nbsp; beta</p>\n\nGamma",
+            }
+        ]))
+
+        assert entries[0]["ai_summary"].startswith("一句话：")
+        assert seen_texts == [
+            "标题：Test Title\n来源：Example Feed\n正文：Alpha beta Gamma"
+        ]
 
 
 class TestInit:
@@ -125,4 +155,15 @@ class TestPrompt:
     def test_prompt_formatting(self):
         prompt = SUMMARIZE_PROMPT.format(content="Test content")
         assert "Test content" in prompt
-        assert len(prompt) < 500
+        assert "一句话" in prompt
+        assert "看点" in prompt
+        assert "不要 Markdown" in prompt
+        assert len(prompt) < 800
+
+    def test_entry_summary_text_falls_back_to_summary(self):
+        result = _entry_summary_text({
+            "title": "Title",
+            "summary": "<p>Short&nbsp;summary</p>",
+        })
+
+        assert result == "标题：Title\n正文：Short summary"

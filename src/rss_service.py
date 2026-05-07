@@ -279,9 +279,12 @@ async def summarize_missing_articles(limit: int = 5) -> int:
         return 0
     entries = [
         {
+            "title": article.get("title", ""),
             "link": article.get("link", ""),
             "summary": article.get("summary", ""),
             "content": article.get("content", ""),
+            "source": article.get("source", ""),
+            "source_name": article.get("source_name", ""),
         }
         for article in articles
     ]
